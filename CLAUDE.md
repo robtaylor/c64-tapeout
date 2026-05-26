@@ -50,7 +50,7 @@ VHDL is synthesized via the GHDL-Yosys plugin (ghdl --synth → Yosys RTLIL).
 
 ## Key constraints
 
-- Clock: single-domain, targeting ~8 MHz (C64 dot clock). See ADR 0001.
+- Clock: single-domain, 32 MHz (C64 system clock). 32-state sequencer → ~8 MHz pixel, ~1 MHz CPU. See ADR 0001.
 - Memory: 8 × OCD SRAM macros (8KB main RAM) + ROMs synthesized as LUTs.
 - PDK: gf180mcu_fd_sc_mcu9t5v0 (9-track 5V). Must export STD_CELL_LIBRARY before LibreLane.
 - Slot: 1×1 (3932×5122 µm die).

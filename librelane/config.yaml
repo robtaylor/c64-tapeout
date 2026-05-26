@@ -56,10 +56,12 @@ IGNORE_DISCONNECTED_MODULES:
 - gf180mcu_ws_ip__id
 - gf180mcu_ws_ip__logo
 
-# Clock: 8 MHz (125 ns period) — C64 dot clock. ADR 0001.
+# Clock: 32 MHz (31.25 ns period) — C64 system clock. ADR 0001.
+# The 32-state cycle sequencer divides this into ~1 MHz CPU and
+# ~8 MHz pixel rate, matching the real C64's timing.
 CLOCK_PORT: clk_PAD
 CLOCK_NET: clk_pad/Y
-CLOCK_PERIOD: 125
+CLOCK_PERIOD: 31.25
 
 # Hold margin
 PL_RESIZER_HOLD_SLACK_MARGIN: 0.35

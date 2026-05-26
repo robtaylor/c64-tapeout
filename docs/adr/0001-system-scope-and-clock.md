@@ -21,7 +21,9 @@ GF180MCU 9T cells at TT/25°C can close timing at 25 MHz comfortably (proven by 
 1. **Scope**: T65 6510 CPU + VIC-II (video_vicII_656x) + 1× MOS6526 CIA + bus logic (fpga64_buslogic) + color palette + color RAM.
 2. **Excluded**: SID (sound), second CIA, cartridge port, IEC serial, tape, REU.
 3. **Memory**: 8 × OCD SRAM macros (8KB) for main RAM. KERNAL ROM (8KB), BASIC ROM (8KB), Character ROM (4KB) synthesized as combinational logic (LUTs). Color RAM (1KB, 4-bit) synthesized.
-4. **Clock**: Single clock domain at ~8 MHz (C64 dot clock). The internal cycle sequencer divides this for CPU timing (~1 MHz effective). No PLL needed — the pad clock IS the dot clock.
+4. **Clock**: Single clock domain at 32 MHz. The MiSTer's 32-state cycle sequencer runs at this frequency, producing ~8 MHz effective pixel rate and ~1 MHz effective CPU rate. GF180 9T cells handle 32 MHz comfortably (31.25 ns period vs test-tapeout-1's 40 ns at 25 MHz). No PLL needed — external oscillator feeds the clock pad directly.
+
+**Amendment (2026-05-26):** Originally specified ~8 MHz, but the proven cycle sequencer from fpga64_sid_iec requires 32 MHz. Changing pixel rate would require rewriting VIC-II line timing. 32 MHz is well within GF180 capability.
 5. **CIA selection**: CIA1 (keyboard matrix scanner, timer A/B, IRQ generation). CIA2 (VIC bank select, serial bus) excluded; VIC bank hardwired to bank 0.
 
 ## Alternatives considered
