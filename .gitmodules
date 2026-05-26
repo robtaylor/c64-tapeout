@@ -1,0 +1,8 @@
+[submodule "deps/gf180mcu_ocd_ip_sram"]
+	path = deps/gf180mcu_ocd_ip_sram
+	url = https://github.com/RTimothyEdwards/gf180mcu_ocd_ip_sram.git
+
+[submodule "deps/jacquard"]
+	path = deps/jacquard
+	url = https://github.com/ChipFlow/Jacquard.git
+	branch = main

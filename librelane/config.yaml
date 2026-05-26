@@ -1,0 +1,204 @@
+meta:
+  version: 3
+  flow: Chip
+
+DESIGN_NAME: chip_top
+
+# Source list — SystemVerilog/Verilog only. VHDL is handled by the GHDL
+# synthesis hook (ADR 0002). Order: SRAM wrapper → C64 Verilog (CIA) →
+# tapeout RTL → top.
+VERILOG_FILES:
+# SRAM macro wrapper
+- dir::../src/sram_wrapper.sv
+
+# C64 Verilog modules
+- dir::../rtl/mos6526.v
+
+# Synthesized ROMs
+- dir::../src/rom_kernal.sv
+- dir::../src/rom_basic.sv
+- dir::../src/rom_chargen.sv
+
+# Tapeout integration
+- dir::../src/chip_core.sv
+- dir::../src/chip_top.sv
+
+VERILOG_INCLUDE_DIRS:
+- dir::../src
+
+# GHDL-Yosys: VHDL files are imported via EXTRA_SYNTH_COMMANDS
+# (see synth_hook.tcl or equivalent LibreLane mechanism).
+# The VHDL entities become Yosys modules after `ghdl --synth`.
+
+PRIMARY_GDSII_STREAMOUT_TOOL: klayout
+
+# 9T 5V standard cell library (same as test-tapeout-1)
+STD_CELL_LIBRARY: gf180mcu_fd_sc_mcu9t5v0
+
+# Synthesis tuning (adopted from wren6991/riscboy-180 via test-tapeout-1)
+SYNTH_ABC_BUFFERING: True
+SYNTH_SIZING: True
+
+# SDC
+PNR_SDC_FILE: dir::chip_top.sdc
+SIGNOFF_SDC_FILE: dir::chip_top.sdc
+FALLBACK_SDC: dir::chip_top.sdc
+
+# Power / ground
+VDD_NETS:
+- VDD
+GND_NETS:
+- VSS
+
+# Ignore disconnected outputs on bidir pads and hard IPs
+IGNORE_DISCONNECTED_MODULES:
+- gf180mcu_fd_io__bi_24t
+- gf180mcu_ws_ip__id
+- gf180mcu_ws_ip__logo
+
+# Clock: 8 MHz (125 ns period) — C64 dot clock. ADR 0001.
+CLOCK_PORT: clk_PAD
+CLOCK_NET: clk_pad/Y
+CLOCK_PERIOD: 125
+
+# Hold margin
+PL_RESIZER_HOLD_SLACK_MARGIN: 0.35
+GRT_RESIZER_HOLD_SLACK_MARGIN: 0.3
+
+# Placement density — conservative; 8 SRAM macros + moderate logic
+PL_TARGET_DENSITY_PCT: 30
+GRT_ALLOW_CONGESTION: true
+
+# Antenna repair
+DRT_ANTENNA_REPAIR_ITERS: 10
+DRT_ANTENNA_REPAIR_MARGIN: 10
+
+# PDN straps
+PDN_VWIDTH: 5
+PDN_HWIDTH: 5
+PDN_VSPACING: 1
+PDN_HSPACING: 1
+PDN_VPITCH: 75
+PDN_HPITCH: 75
+
+# PDN core ring
+PDN_CORE_RING: True
+PDN_CORE_RING_VWIDTH: 25
+PDN_CORE_RING_HWIDTH: 25
+PDN_CORE_RING_CONNECT_TO_PADS: True
+PDN_ENABLE_PINS: False
+PDN_CORE_VERTICAL_LAYER: Metal2
+PDN_CORE_HORIZONTAL_LAYER: Metal3
+
+ERROR_ON_MAGIC_DRC: False
+
+# Prevent false positive DRC errors in I/O cells / SRAM
+MAGIC_GDS_FLATGLOB:
+- "*_CDNS_*"
+- "*$$*"
+- "M1_N*"
+- "M1_P*"
+- "M2_M1*"
+- "M3_M2*"
+- "nmos_5p0*"
+- "nmos_1p2*"
+- "pmos_5p0*"
+- "pmos_1p2*"
+- "via1_*"
+- "ypass_gate*"
+- "G_ring_*"
+- "dcap_103*"
+- "din_*"
+- "mux821_*"
+- "rdummy_*"
+- "pmoscap_*"
+- "xdec_*"
+- "ypredec*"
+- "xpredec*"
+- "prexdec_*"
+- "xdec8_*"
+- "xdec16_*"
+- "xdec32_*"
+- "sa_*"
+
+KLAYOUT_FILLER_OPTIONS:
+  Metal2_ignore_active: true
+
+MAGIC_EXT_UNIQUE: notopports
+
+MACROS:
+  gf180mcu_ws_ip__id:
+    gds:
+      - dir::../ip/gf180mcu_ws_ip__id/gds/gf180mcu_ws_ip__id.gds
+    lef:
+      - dir::../ip/gf180mcu_ws_ip__id/lef/gf180mcu_ws_ip__id.lef
+    vh:
+      - dir::../ip/gf180mcu_ws_ip__id/vh/gf180mcu_ws_ip__id.v
+    lib:
+      "*":
+        - dir::../ip/gf180mcu_ws_ip__id/lib/gf180mcu_ws_ip__id.lib
+    instances:
+      chip_id:
+        location: [26, 26]
+        orientation: N
+
+  gf180mcu_ws_ip__logo:
+    gds:
+      - dir::../ip/gf180mcu_ws_ip__logo/gds/gf180mcu_ws_ip__logo.gds
+    lef:
+      - dir::../ip/gf180mcu_ws_ip__logo/lef/gf180mcu_ws_ip__logo.lef
+    vh:
+      - dir::../ip/gf180mcu_ws_ip__logo/vh/gf180mcu_ws_ip__logo.v
+    lib:
+      "*":
+        - dir::../ip/gf180mcu_ws_ip__logo/lib/gf180mcu_ws_ip__logo.lib
+    instances:
+      wafer_space_logo:
+        location: ["expr::$DIE_AREA[2] + -169.25", "expr::$DIE_AREA[3] + -169.25"]
+        orientation: N
+
+  # 8 × OCD SRAM macros (8KB): 2 rows × 4 columns
+  # Row 0: orientation N (power pins at top)
+  # Row 1: orientation S (power pins at bottom, meeting row 0)
+  gf180mcu_ocd_ip_sram__sram1024x8m8wm1:
+    gds:
+      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.gds
+    lef:
+      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef
+    vh:
+      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.blackbox.v
+    lib:
+      "*_tt_025C_5v00":
+        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib
+      "*_ff_n40C_5v50":
+        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ff_n40C_3v60.lib
+      "*_ss_125C_4v50":
+        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ss_125C_3v00.lib
+    instances:
+      # Row 0 (orientation N)
+      i_chip_core.sram_u.macro_0: { location: [2000,  600], orientation: N }
+      i_chip_core.sram_u.macro_1: { location: [2350,  600], orientation: N }
+      i_chip_core.sram_u.macro_2: { location: [2700,  600], orientation: N }
+      i_chip_core.sram_u.macro_3: { location: [3050,  600], orientation: N }
+      # Row 1 (orientation S)
+      i_chip_core.sram_u.macro_4: { location: [2000, 1166], orientation: S }
+      i_chip_core.sram_u.macro_5: { location: [2350, 1166], orientation: S }
+      i_chip_core.sram_u.macro_6: { location: [2700, 1166], orientation: S }
+      i_chip_core.sram_u.macro_7: { location: [3050, 1166], orientation: S }
+
+PDN_MACRO_CONNECTIONS:
+- "i_chip_core.sram_u.macro_0 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_1 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_2 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_3 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_4 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_5 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_6 VDD VSS VDD VSS"
+- "i_chip_core.sram_u.macro_7 VDD VSS VDD VSS"
+
+FP_MACRO_HORIZONTAL_HALO: 10
+FP_MACRO_VERTICAL_HALO: 10
+PDN_HORIZONTAL_HALO: 5
+PDN_VERTICAL_HALO: 5
+
+PDN_CFG: dir::pdn_cfg.tcl

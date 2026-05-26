@@ -1,0 +1,32 @@
+# Build outputs
+build/
+final/
+
+# PDK (cloned separately)
+gf180mcu/
+
+# Nix
+.nix-shell-gcroot
+result
+
+# Jacquard vendor symlink
+vendor
+
+# Simulation
+cocotb/sim_build*/
+*.fst
+*.vcd
+
+# Waveform viewer
+*.gtkw
+
+# OS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Images
+img/
