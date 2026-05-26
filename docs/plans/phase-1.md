@@ -16,15 +16,17 @@ Produce a GDS-ready C64 subset (T65 + VIC-II + CIA + 8KB SRAM) on the GF180MCU 1
 
 ## Where things stand (2026-05-26)
 
-- Project structure: created, docs framework in place
-- RTL: not yet copied/adapted from C64_MiSTer
-- Flow infrastructure: not yet set up (Makefile, flake.nix, config.yaml)
+- WS1 (flow infra): Makefile, flake.nix, config.yaml, SDC, PDN all created. Untested (needs nix shell).
+- WS2 (RTL): Core wired up. c64_system.vhd + c64_buslogic.vhd created. chip_core.sv integrates VHDL system + Verilog CIA + SRAM + ROMs. Real ROM content generated from MIF files. Clock updated to 32 MHz (ADR 0001 amended).
+- WS3 (cocotb): Not started.
+- WS4 (GHDL-Yosys): Spike documented, test script written. Blocked on nix shell.
+- WS5/WS6: Not started.
 
 ## Workstreams
 
 ### WS1 — Flow infrastructure (Nix + Makefile + LibreLane config)
 
-**Status:** Not started
+**Status:** In flight — files created, awaiting nix shell validation
 
 Set up the build system cribbed from test-tapeout-1:
 - `flake.nix`: LibreLane 3.0 dev shell + GHDL + cocotb + Icarus
@@ -44,7 +46,7 @@ Set up the build system cribbed from test-tapeout-1:
 
 ### WS2 — RTL adaptation (C64 core → tapeout-ready)
 
-**Status:** Not started
+**Status:** In flight — core integration done, ROM content generated
 
 Copy and adapt the C64 VHDL/Verilog from C64_MiSTer:
 
