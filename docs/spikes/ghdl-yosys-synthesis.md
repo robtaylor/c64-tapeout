@@ -1,6 +1,6 @@
 # Spike — Can GHDL-Yosys synthesize the C64 VHDL subset?
 
-**Status:** Open. Time-box: ≤ 1 day; abort if Q1 fails.
+**Status:** Resolved (2026-05-26) — YES; GHDL 6.0.0 synthesizes all VHDL to 20K lines of Verilog.
 
 ## Question
 
@@ -33,8 +33,9 @@ The C64 core is ~5000 lines of VHDL from the FPGA64 project (2005-2021), targeti
 
 ## Findings
 
-(To be filled in when running the spike)
+- 2026-05-26: Q1 passes after two fixes: (1) `cpu_6510.vhd` missing `entity` keyword, (2) `spram.vhd` shared variable → signal. `fpga64_rgbcolor.vhd` removed (not needed).
+- 2026-05-26: Q2 passes. `ghdl --synth --out=verilog c64_system` → 20,472 lines, 8 modules. Color RAM inferred as 4×1024 RAM.
 
 ## Outcome
 
-(Pending)
+GHDL 6.0.0 synthesizes the entire C64 VHDL subset. ADR 0002 confirmed.

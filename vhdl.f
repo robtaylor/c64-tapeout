@@ -13,9 +13,6 @@ rtl/cpu_6510.vhd
 # VIC-II video chip
 rtl/video_vicII_656x.vhd
 
-# Color palette (VIC color index → RGB, unused in tapeout but kept for reference)
-rtl/fpga64_rgbcolor.vhd
-
 # Single-port RAM (used for color RAM)
 rtl/spram.vhd
 

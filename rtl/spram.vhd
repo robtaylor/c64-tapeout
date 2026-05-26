@@ -1,17 +1,15 @@
 library ieee;
 use IEEE.std_logic_1164.all;
-use IEEE.std_logic_unsigned.ALL;
 use IEEE.numeric_std.all;
 
 entity spram is
-
-	generic 
+	generic
 	(
 		DATA_WIDTH : natural := 8;
 		ADDR_WIDTH : natural := 10
 	);
 
-	port 
+	port
 	(
 		clk  : in  std_logic;
 		addr : in  unsigned((ADDR_WIDTH - 1) downto 0);
@@ -27,15 +25,15 @@ architecture rtl of spram is
 	subtype word_t is unsigned((DATA_WIDTH-1) downto 0);
 	type memory_t is array(2**ADDR_WIDTH-1 downto 0) of word_t;
 
-	shared variable ram : memory_t;
+	signal ram : memory_t;
 
 begin
 
 	process(clk)
 	begin
-	if(rising_edge(clk)) then 
+	if(rising_edge(clk)) then
 		if(we = '1') then
-			ram(to_integer(addr)) := data;
+			ram(to_integer(addr)) <= data;
 			q <= data;
 		else
 			q <= ram(to_integer(addr));
