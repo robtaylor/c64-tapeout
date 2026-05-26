@@ -5,14 +5,17 @@
 --   - No SID, no CIA2, no IEC, no DMA, no turbo, no keyboard
 --   - No cartridge (game/exrom hardwired inactive)
 --   - External ROM data ports (no internal dprom)
---   - CIA1 port A/B directly exposed for pad I/O
+--   - CIA1 interface exposed as ports (not instantiated here, because
+--     mos6526 is Verilog and GHDL can't resolve cross-language components)
 --
--- Subsystems:
+-- Subsystems instantiated here (all VHDL):
 --   T65 CPU (via cpu_6510 wrapper)
 --   VIC-II (video_vicii_656x, PAL 6569 mode)
---   MOS6526 CIA1 (timers, port I/O, IRQ)
 --   c64_buslogic (simplified PLA / memory map)
---   Color RAM (1024 × 4-bit)
+--   Color RAM (1024 × 4-bit, via spram)
+--
+-- The parent module (chip_core.sv) instantiates both this entity AND
+-- mos6526.v, wiring the CIA interface ports between them.
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -24,21 +27,20 @@ entity c64_system is
         clk32       : in  std_logic;
         reset_n     : in  std_logic;
 
-        -- External RAM interface (directly to SRAM wrapper)
+        -- External RAM interface
         ramAddr     : out unsigned(15 downto 0);
         ramDin      : in  unsigned(7 downto 0);
         ramDout     : out unsigned(7 downto 0);
         ramCE       : out std_logic;
         ramWE       : out std_logic;
 
-        -- External ROM data (synthesized ROMs read externally)
+        -- External ROM data
         kernalData  : in  unsigned(7 downto 0);
         basicData   : in  unsigned(7 downto 0);
         chargenData : in  unsigned(7 downto 0);
-        -- ROM address is on systemAddr output
         romAddr     : out unsigned(15 downto 0);
 
-        -- Chip selects (active-high, directly usable by external ROMs)
+        -- ROM chip selects
         cs_kernal   : out std_logic;
         cs_basic    : out std_logic;
         cs_chargen  : out std_logic;
@@ -48,22 +50,28 @@ entity c64_system is
         vsync       : out std_logic;
         colorIndex  : out unsigned(3 downto 0);
 
-        -- CIA1 port I/O (directly to pads)
-        cia1_pa_in  : in  unsigned(7 downto 0);
-        cia1_pa_out : out unsigned(7 downto 0);
-        cia1_pb_in  : in  unsigned(7 downto 0);
-        cia1_pb_out : out unsigned(7 downto 0);
-        cia1_irq_n  : out std_logic;
+        -- CIA1 register interface (active signals go to mos6526 in SV)
+        cia1_cs     : out std_logic;
+        cia1_rw     : out std_logic;
+        cia1_rs     : out unsigned(3 downto 0);
+        cia1_din    : out unsigned(7 downto 0);
+        cia1_dout   : in  unsigned(7 downto 0);
+        cia1_phi2_p : out std_logic;
+        cia1_phi2_n : out std_logic;
+        cia1_irq_n  : in  std_logic;
 
         -- CPU debug
         cpuAddr_o   : out unsigned(15 downto 0);
-        cpuRW_o     : out std_logic
+        cpuRW_o     : out std_logic;
+
+        -- Active-high reset output (synced to clk32)
+        reset_o     : out std_logic
     );
 end c64_system;
 
 architecture rtl of c64_system is
 
-    -- System state machine (same 32-state cycle as original)
+    -- System state machine
     type sysCycleDef is (
         CYCLE_EXT0, CYCLE_EXT1, CYCLE_EXT2, CYCLE_EXT3,
         CYCLE_DMA0, CYCLE_DMA1, CYCLE_DMA2, CYCLE_DMA3,
@@ -90,14 +98,12 @@ architecture rtl of c64_system is
     signal enableVic    : std_logic;
     signal enablePixel  : std_logic;
 
-    signal irq_cia1     : std_logic;
     signal irq_vic      : std_logic;
 
     signal systemWe     : std_logic;
     signal pulseWr_io   : std_logic;
     signal systemAddr   : unsigned(15 downto 0);
 
-    signal cs_io_int    : std_logic;
     signal cs_vic_int   : std_logic;
     signal cs_color_int : std_logic;
     signal cs_cia1_int  : std_logic;
@@ -118,12 +124,8 @@ architecture rtl of c64_system is
 
     signal reset        : std_logic := '1';
 
-    -- CIA signals
     signal enableCia_p  : std_logic;
     signal enableCia_n  : std_logic;
-    signal cia1Do       : unsigned(7 downto 0);
-
-    signal todclk       : std_logic;
 
     -- VIC signals
     signal vicColorIndex: unsigned(3 downto 0);
@@ -135,35 +137,6 @@ architecture rtl of c64_system is
     signal lastVicDi    : unsigned(7 downto 0);
     signal colorData    : unsigned(3 downto 0);
     signal colorDataAec : unsigned(3 downto 0);
-
-    component mos6526
-        port (
-            clk       : in  std_logic;
-            mode      : in  std_logic;
-            phi2_p    : in  std_logic;
-            phi2_n    : in  std_logic;
-            res_n     : in  std_logic;
-            cs_n      : in  std_logic;
-            rw        : in  std_logic;
-            rs        : in  unsigned(3 downto 0);
-            db_in     : in  unsigned(7 downto 0);
-            db_out    : out unsigned(7 downto 0);
-            pa_in     : in  unsigned(7 downto 0);
-            pa_out    : out unsigned(7 downto 0);
-            pa_oe     : out unsigned(7 downto 0);
-            pb_in     : in  unsigned(7 downto 0);
-            pb_out    : out unsigned(7 downto 0);
-            pb_oe     : out unsigned(7 downto 0);
-            flag_n    : in  std_logic;
-            pc_n      : out std_logic;
-            tod       : in  std_logic;
-            sp_in     : in  std_logic;
-            sp_out    : out std_logic;
-            cnt_in    : in  std_logic;
-            cnt_out   : out std_logic;
-            irq_n     : out std_logic
-        );
-    end component;
 
 begin
 
@@ -191,6 +164,8 @@ begin
             end if;
         end if;
     end process;
+
+    reset_o <= reset;
 
     -- PHI0 clock emulation
     process(clk32)
@@ -232,7 +207,7 @@ begin
         end if;
     end process;
 
-    -- Pixel timing (8 pulses per 32 states = ~8 MHz from 32 MHz)
+    -- Pixel timing
     process(clk32)
     begin
         if rising_edge(clk32) then
@@ -283,7 +258,7 @@ begin
     end process;
 
     -- -----------------------------------------------------------------------
-    -- Color RAM (1024 × 4-bit, synthesized as flip-flops)
+    -- Color RAM
     -- -----------------------------------------------------------------------
     colorram: entity work.spram
     generic map (
@@ -322,7 +297,7 @@ begin
         vicAddr     => vicAddr,
         vicData     => vicData,
         colorData   => colorData,
-        cia1Data    => cia1Do,
+        cia1Data    => cia1_dout,
         lastVicData => lastVicDi,
 
         io_enable   => io_enable,
@@ -378,19 +353,18 @@ begin
         ba         => baLoc,
         ba_dma     => ba_dma,
 
-        -- PAL 6569 mode only
         mode6569   => '1',
         mode6567old=> '0',
         mode6567R8 => '0',
         mode6572   => '0',
-        variant    => "00",  -- NMOS
+        variant    => "00",
 
         turbo_en   => '0',
         turbo_state=> open,
 
         cs         => cs_vic_int,
         we         => cpuWe,
-        lp_n       => '1',  -- no lightpen
+        lp_n       => '1',
 
         aRegisters => cpuAddr(5 downto 0),
         diRegisters=> cpuDo,
@@ -408,7 +382,6 @@ begin
         irq_n      => irq_vic
     );
 
-    -- VIC bank: always bank 0 ($0000-$3FFF). No CIA2 to change it.
     vicAddr(15 downto 14) <= "00";
 
     process(clk32)
@@ -421,54 +394,14 @@ begin
     end process;
 
     -- -----------------------------------------------------------------------
-    -- CIA1
+    -- CIA1 interface (exposed as ports, instantiated in chip_core.sv)
     -- -----------------------------------------------------------------------
-    cia1: mos6526
-    port map (
-        clk    => clk32,
-        mode   => '0',  -- 6526 "old" mode
-        phi2_p => enableCia_p,
-        phi2_n => enableCia_n,
-        res_n  => not reset,
-        cs_n   => not cs_cia1_int,
-        rw     => not cpuWe,
-
-        rs     => cpuAddr(3 downto 0),
-        db_in  => cpuDo,
-        db_out => cia1Do,
-
-        pa_in  => cia1_pa_in,
-        pa_out => cia1_pa_out,
-        pb_in  => cia1_pb_in,
-        pb_out => cia1_pb_out,
-
-        flag_n => '1',
-        sp_in  => '1',
-        cnt_in => '1',
-
-        tod    => todclk,
-
-        irq_n  => irq_cia1
-    );
-
-    -- TOD clock divider (50 Hz for PAL from 32 MHz)
-    process(clk32)
-        variable sum : integer range 0 to 33000000;
-    begin
-        if rising_edge(clk32) then
-            if reset = '1' then
-                todclk <= '0';
-                sum := 0;
-            else
-                -- PAL: divide to ~50 Hz
-                sum := sum + 100;
-                if sum >= 31527954 then
-                    sum := sum - 31527954;
-                    todclk <= not todclk;
-                end if;
-            end if;
-        end if;
-    end process;
+    cia1_cs     <= cs_cia1_int;
+    cia1_rw     <= not cpuWe;
+    cia1_rs     <= cpuAddr(3 downto 0);
+    cia1_din    <= cpuDo;
+    cia1_phi2_p <= enableCia_p;
+    cia1_phi2_n <= enableCia_n;
 
     -- -----------------------------------------------------------------------
     -- CPU (6510)
@@ -478,8 +411,8 @@ begin
         clk    => clk32,
         reset  => reset,
         enable => enableCpu,
-        nmi_n  => '1',  -- no NMI source
-        irq_n  => irq_cia1 and irq_vic,
+        nmi_n  => '1',
+        irq_n  => cia1_irq_n and irq_vic,
         rdy    => baLoc,
 
         di     => cpuDi,
@@ -487,41 +420,25 @@ begin
         do     => cpuDo,
         we     => cpuWe,
 
-        -- I/O port: bits 0-2 are bank switch, bit 3 = cassette write (unused),
-        -- bit 4 = cassette sense (always low = no tape), bit 5 = motor (unused)
         diIO   => cpuIO(7) & cpuIO(6) & cpuIO(5) & '0' & cpuIO(3) & "111",
         doIO   => cpuIO
     );
 
     -- -----------------------------------------------------------------------
-    -- External RAM interface
+    -- External interfaces
     -- -----------------------------------------------------------------------
     ramDout <= cpuDo;
     ramAddr <= systemAddr;
     ramWE   <= systemWe when sysCycle >= CYCLE_CPU0 else '0';
     ramCE   <= cs_ram_int when sysCycle = CYCLE_VIC0 or cpu_cyc = '1' else '0';
 
-    -- -----------------------------------------------------------------------
-    -- External ROM interface
-    -- -----------------------------------------------------------------------
     romAddr    <= systemAddr;
     cs_kernal  <= cs_kernal_int;
     cs_basic   <= cs_basic_int;
     cs_chargen <= cs_chargen_int;
 
-    -- -----------------------------------------------------------------------
-    -- Video output
-    -- -----------------------------------------------------------------------
     colorIndex <= vicColorIndex;
 
-    -- -----------------------------------------------------------------------
-    -- CIA1 IRQ output
-    -- -----------------------------------------------------------------------
-    cia1_irq_n <= irq_cia1;
-
-    -- -----------------------------------------------------------------------
-    -- CPU debug outputs
-    -- -----------------------------------------------------------------------
     cpuAddr_o <= cpuAddr;
     cpuRW_o   <= not cpuWe;
 

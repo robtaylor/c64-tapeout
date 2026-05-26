@@ -91,19 +91,28 @@ module chip_core #(
     wire        vic_vsync;
     wire [3:0]  vic_color;
 
-    // CIA1
-    wire [7:0]  cia_pa_in_w;
-    wire [7:0]  cia_pa_out_w;
-    wire [7:0]  cia_pb_in_w;
-    wire [7:0]  cia_pb_out_w;
+    // CIA1 — register interface (c64_system ↔ mos6526)
+    wire        cia_cs;
+    wire        cia_rw;
+    wire [3:0]  cia_rs;
+    wire [7:0]  cia_din;
+    wire [7:0]  cia_dout;
+    wire        cia_phi2_p;
+    wire        cia_phi2_n;
     wire        cia_irq_n;
+    wire [7:0]  cia_pa_out_w;
+    wire [7:0]  cia_pa_oe_w;
+    wire [7:0]  cia_pb_out_w;
+    wire [7:0]  cia_pb_oe_w;
+    wire        c64_reset;
 
     // CPU debug
     wire [15:0] cpu_addr_dbg;
     wire        cpu_rw_dbg;
 
     // -----------------------------------------------------------------
-    // C64 system (VHDL — T65 + VIC-II + CIA1 + bus logic + sequencer)
+    // C64 system (VHDL — T65 + VIC-II + bus logic + sequencer)
+    // CIA1 interface exposed as ports (mos6526 instantiated below)
     // -----------------------------------------------------------------
     c64_system c64_u (
         .clk32       (clk),
@@ -127,14 +136,65 @@ module chip_core #(
         .vsync       (vic_vsync),
         .colorIndex  (vic_color),
 
-        .cia1_pa_in  (cia_pa_in_w),
-        .cia1_pa_out (cia_pa_out_w),
-        .cia1_pb_in  (cia_pb_in_w),
-        .cia1_pb_out (cia_pb_out_w),
+        .cia1_cs     (cia_cs),
+        .cia1_rw     (cia_rw),
+        .cia1_rs     (cia_rs),
+        .cia1_din    (cia_din),
+        .cia1_dout   (cia_dout),
+        .cia1_phi2_p (cia_phi2_p),
+        .cia1_phi2_n (cia_phi2_n),
         .cia1_irq_n  (cia_irq_n),
 
         .cpuAddr_o   (cpu_addr_dbg),
-        .cpuRW_o     (cpu_rw_dbg)
+        .cpuRW_o     (cpu_rw_dbg),
+        .reset_o     (c64_reset)
+    );
+
+    // -----------------------------------------------------------------
+    // CIA1 (Verilog — mos6526)
+    // -----------------------------------------------------------------
+    // TOD clock: ~50 Hz for PAL
+    reg todclk;
+    reg [19:0] tod_counter;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            todclk <= 1'b0;
+            tod_counter <= '0;
+        end else begin
+            if (tod_counter >= 20'd319999) begin
+                tod_counter <= '0;
+                todclk <= ~todclk;
+            end else begin
+                tod_counter <= tod_counter + 1'b1;
+            end
+        end
+    end
+
+    mos6526 cia1_u (
+        .clk    (clk),
+        .mode   (1'b0),
+        .phi2_p (cia_phi2_p),
+        .phi2_n (cia_phi2_n),
+        .res_n  (~c64_reset),
+        .cs_n   (~cia_cs),
+        .rw     (cia_rw),
+
+        .rs     (cia_rs),
+        .db_in  (cia_din),
+        .db_out (cia_dout),
+
+        .pa_in  (bidir_in[PAD_CIA_PA7:PAD_CIA_PA0]),
+        .pa_out (cia_pa_out_w),
+        .pa_oe  (cia_pa_oe_w),
+        .pb_in  (bidir_in[PAD_CIA_PB7:PAD_CIA_PB0]),
+        .pb_out (cia_pb_out_w),
+        .pb_oe  (cia_pb_oe_w),
+
+        .flag_n (1'b1),
+        .tod    (todclk),
+        .sp_in  (1'b1),
+        .cnt_in (1'b1),
+        .irq_n  (cia_irq_n)
     );
 
     // -----------------------------------------------------------------
@@ -177,12 +237,6 @@ module chip_core #(
         else
             heartbeat_ctr <= heartbeat_ctr + 1'b1;
     end
-
-    // -----------------------------------------------------------------
-    // CIA port A/B ↔ pad I/O
-    // -----------------------------------------------------------------
-    assign cia_pa_in_w = bidir_in[PAD_CIA_PA7:PAD_CIA_PA0];
-    assign cia_pb_in_w = bidir_in[PAD_CIA_PB7:PAD_CIA_PB0];
 
     // -----------------------------------------------------------------
     // Pad output steering
@@ -245,7 +299,8 @@ module chip_core #(
 
     wire _unused;
     assign _unused = &{1'b0, input_in, analog,
-                       rom_cs_kernal, rom_cs_basic, rom_cs_chargen};
+                       rom_cs_kernal, rom_cs_basic, rom_cs_chargen,
+                       cia_pa_oe_w, cia_pb_oe_w};
 
 endmodule
 
