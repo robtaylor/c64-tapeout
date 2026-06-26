@@ -58,6 +58,40 @@ librelane-klayout: ## Open the last run in KLayout
 	librelane librelane/slots/slot_${SLOT}.yaml librelane/config.yaml --pdk ${PDK} --pdk-root ${PDK_ROOT} --manual-pdk --last-run --flow OpenInKLayout
 .PHONY: librelane-klayout
 
+# ----------------------------------------------------------------------------
+# GHDL + Yosys synthesis test (no PDK required)
+# ----------------------------------------------------------------------------
+GHDL ?= /opt/homebrew/bin/ghdl
+GHDL_WORK = build/ghdl_work
+GHDL_VERILOG = build/c64_system_synth.v
+
+$(GHDL_WORK):
+	mkdir -p $@
+
+$(GHDL_VERILOG): $(wildcard rtl/*.vhd rtl/t65/*.vhd) vhdl.f | $(GHDL_WORK)
+	@while IFS= read -r f; do \
+		case "$$f" in \#*|"") continue;; esac; \
+		echo "GHDL-a: $$f"; \
+		$(GHDL) -a --std=08 -fsynopsys --workdir=$(GHDL_WORK) "$$f" || exit 1; \
+	done < vhdl.f
+	$(GHDL) --synth --std=08 -fsynopsys --workdir=$(GHDL_WORK) --out=verilog c64_system 2>build/ghdl_warnings.txt > $@
+	@echo "GHDL synth: $$(wc -l < $@) lines of Verilog"
+
+synth-test: $(GHDL_VERILOG) ## Synthesize design with Yosys (no PDK, generic cells)
+	yosys -p " \
+		read_verilog $(GHDL_VERILOG); \
+		read_verilog -sv rtl/mos6526.v; \
+		read_verilog -sv src/sram_wrapper.sv; \
+		read_verilog -sv src/rom_kernal.sv; \
+		read_verilog -sv src/rom_basic.sv; \
+		read_verilog -sv src/rom_chargen.sv; \
+		read_verilog -sv src/chip_core.sv; \
+		hierarchy -top chip_core -chparam NUM_INPUT_PADS 12 -chparam NUM_BIDIR_PADS 40 -chparam NUM_ANALOG_PADS 2; \
+		synth -top chip_core -flatten; \
+		stat; \
+	" 2>&1 | tee build/synth_test.log | tail -30
+.PHONY: synth-test
+
 sim: ## Run RTL simulation with cocotb
 	cd cocotb; PDK_ROOT=${PDK_ROOT} PDK=${PDK} SLOT=${SLOT} python3 chip_top_tb.py
 .PHONY: sim

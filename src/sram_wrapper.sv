@@ -37,7 +37,7 @@ module sram_wrapper (
     // Instantiate 8 SRAM macros
     generate
         for (genvar i = 0; i < 8; i++) begin : macro
-            `ifdef SYNTHESIS
+            `ifdef USE_SRAM_MACROS
             gf180mcu_ocd_ip_sram__sram1024x8m8wm1 macro_inst (
                 .CLK  (clk),
                 .CEN  (~macro_ce[i]),   // active-low chip enable
