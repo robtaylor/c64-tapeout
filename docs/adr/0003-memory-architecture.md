@@ -1,6 +1,6 @@
 # ADR 0003 — Memory architecture: 8KB SRAM + synthesized ROMs
 
-**Status:** Accepted (2026-05-26).
+**Status:** Superseded (2026-06-30) by [ADR 0004](0004-external-qspi-psram.md) for the main-RAM decision. ROM and color-RAM strategy below still applies.
 
 **TL;DR.** In the context of fitting a C64 subset into a GF180MCU 1×1 slot, facing 85KB total memory requirement vs ~16-macro practical limit, we chose 8 × OCD SRAM macros (8KB main RAM) with KERNAL/BASIC/Character ROMs synthesized as combinational logic, accepting that only custom programs fitting in 8KB can run.
 
