@@ -4,15 +4,19 @@ meta:
 
 DESIGN_NAME: chip_top
 
-# Source list — SystemVerilog/Verilog only. VHDL is handled by the GHDL
-# synthesis hook (ADR 0002). Order: SRAM wrapper → C64 Verilog (CIA) →
-# tapeout RTL → top.
+# Source list — all Verilog/SV. VHDL (c64_system + T65 + VIC + bus logic)
+# is pre-synthesized by GHDL into build/c64_system_synth.v via the
+# `synth-test` Makefile target (or `make build/c64_system_synth.v`).
+# This avoids needing the GHDL-Yosys plugin inside the LibreLane image.
 VERILOG_FILES:
-# SRAM macro wrapper
-- dir::../src/sram_wrapper.sv
+# GHDL-pre-synthesized C64 system (T65 + VIC + bus logic + sequencer)
+- dir::../build/c64_system_synth.v
 
 # C64 Verilog modules
 - dir::../rtl/mos6526.v
+
+# SRAM macro wrapper
+- dir::../src/sram_wrapper.sv
 
 # Synthesized ROMs
 - dir::../src/rom_kernal.sv
@@ -26,9 +30,11 @@ VERILOG_FILES:
 VERILOG_INCLUDE_DIRS:
 - dir::../src
 
-# GHDL-Yosys: VHDL files are imported via EXTRA_SYNTH_COMMANDS
-# (see synth_hook.tcl or equivalent LibreLane mechanism).
-# The VHDL entities become Yosys modules after `ghdl --synth`.
+# Enable the GF180 OCD SRAM macro instantiation path in sram_wrapper.sv.
+# (Without this define, sram_wrapper falls back to a registered array —
+# correct for cocotb/Yosys-generic but wrong for PnR.)
+VERILOG_DEFINES:
+- USE_SRAM_MACROS
 
 PRIMARY_GDSII_STREAMOUT_TOOL: klayout
 
