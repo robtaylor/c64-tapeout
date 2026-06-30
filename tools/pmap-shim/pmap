@@ -1,0 +1,18 @@
+#!/bin/sh
+# macOS shim for Linux `pmap`.
+#
+# The open_pdks gf180mcuD KLayout decks (libs.tech/klayout/tech/drc/gf180mcu.drc
+# and .../lvs/gf180mcu.lvs) print a "Memory Usage" log line via:
+#
+#     `pmap #{Process.pid} | tail -1`[10, 40].strip
+#
+# macOS has no `pmap`, so the backtick yields "" , ""[10,40] is nil, and
+# nil.strip raises NoMethodError — crashing KLayout.Antenna / .DRC / .Density
+# and the LVS deck during a LOCAL `make librelane` signoff. (CI is Linux, where
+# pmap exists, so it is unaffected.)
+#
+# This shim emits one line long enough that [10,40] is a valid (non-nil)
+# substring. It touches ONLY that log line — never the DRC/antenna/LVS result.
+# The Makefile prepends this dir to PATH on Darwin only (so the real Linux
+# pmap is never shadowed in CI). See ADR 0001 / docs build-command notes.
+echo "total                         0K"

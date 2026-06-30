@@ -2,6 +2,19 @@ MAKEFILE_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 TOP = chip_top
 
+# macOS local-signoff fixes:
+#  (1) open_pdks gf180mcuD KLayout decks call Linux-only `pmap` for a memory
+#      log line — nil.strip crashes KLayout.DRC/.Antenna/.Density and LVS on
+#      Darwin. Prepend a committed shim. Linux/CI has a real pmap and must
+#      not have it shadowed. See tools/pmap-shim/pmap.
+#  (2) KLayout 0.30.x parallel DRC crashes (std::bad_cast) on the macOS
+#      build for large designs — KLayout #2339. Layer a serial overlay LAST
+#      on Darwin ONLY; Linux/CI keeps workers: max.
+ifeq ($(shell uname -s),Darwin)
+export PATH := $(MAKEFILE_DIR)/tools/pmap-shim:$(PATH)
+KLAYOUT_SERIAL_OVERLAY := librelane/klayout_serial_macos.yaml
+endif
+
 PDK_ROOT ?= $(MAKEFILE_DIR)/gf180mcu
 PDK ?= gf180mcuD
 PDK_TAG ?= 1.8.0
@@ -29,8 +42,8 @@ clone-pdk: ## Clone the GF180MCU PDK repository
 	git clone https://github.com/wafer-space/gf180mcu.git $(MAKEFILE_DIR)/gf180mcu --depth 1 --branch ${PDK_TAG}
 .PHONY: clone-pdk
 
-librelane: ## Run full LibreLane flow incl. signoff
-	librelane librelane/slots/slot_${SLOT}.yaml librelane/config.yaml --save-views-to $(MAKEFILE_DIR)/final --pdk ${PDK} --pdk-root ${PDK_ROOT} --manual-pdk
+librelane: $(GHDL_VERILOG) ## Run full LibreLane flow incl. signoff
+	librelane librelane/slots/slot_${SLOT}.yaml librelane/config.yaml $(KLAYOUT_SERIAL_OVERLAY) --save-views-to $(MAKEFILE_DIR)/final --pdk ${PDK} --pdk-root ${PDK_ROOT} --manual-pdk
 .PHONY: librelane
 
 LIBRELANE_ITER_SKIPS = \
@@ -46,8 +59,8 @@ LIBRELANE_ITER_SKIPS = \
 	--skip Magic.SpiceExtraction \
 	--skip Netgen.LVS --skip Checker.LVS
 
-librelane-pdn: ## Run LibreLane through PnR/STA/IR-drop, skip GDS signoff (fast iteration)
-	librelane librelane/slots/slot_${SLOT}.yaml librelane/config.yaml --save-views-to $(MAKEFILE_DIR)/final --pdk ${PDK} --pdk-root ${PDK_ROOT} --manual-pdk $(LIBRELANE_ITER_SKIPS)
+librelane-pdn: $(GHDL_VERILOG) ## Run LibreLane through PnR/STA/IR-drop, skip GDS signoff (fast iteration)
+	librelane librelane/slots/slot_${SLOT}.yaml librelane/config.yaml $(KLAYOUT_SERIAL_OVERLAY) --save-views-to $(MAKEFILE_DIR)/final --pdk ${PDK} --pdk-root ${PDK_ROOT} --manual-pdk $(LIBRELANE_ITER_SKIPS)
 .PHONY: librelane-pdn
 
 librelane-openroad: ## Open the last run in OpenROAD

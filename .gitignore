@@ -5,6 +5,12 @@ final/
 # PDK (cloned separately)
 gf180mcu/
 
+# LibreLane run outputs
+librelane/runs/
+
+# IP cloned at setup time (consider promoting to submodules)
+deps/gf180mcu_ocd_ip_sram/
+
 # Nix
 .nix-shell-gcroot
 result

@@ -49,9 +49,11 @@
               gnugrep
               gawk
 
-              # VHDL synthesis (ADR 0002)
-              ghdl
-              # ghdl-yosys-plugin is typically bundled with the nix-eda yosys
+              # VHDL synthesis (ADR 0002) is run OUTSIDE the nix shell via the
+              # Homebrew GHDL — the Nix `ghdl-mcode` package fails to evaluate
+              # on aarch64-darwin (only x86_64 backends are available). The
+              # `synth-test` Makefile target produces build/c64_system_synth.v
+              # which LibreLane consumes via VERILOG_FILES.
 
               # Simulation
               iverilog

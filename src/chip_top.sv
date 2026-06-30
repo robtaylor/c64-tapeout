@@ -184,13 +184,16 @@ module chip_top #(
         .analog     (analog_PAD)
     );
 
-    // Chip ID — mandatory for wafer.space tapeout
-    (* keep *)
-    gf180mcu_ws_ip__id chip_id ();
-
-    // wafer.space logo
-    (* keep *)
-    gf180mcu_ws_ip__logo wafer_space_logo ();
+    // Chip ID and wafer.space logo are mandatory for wafer.space tapeout
+    // but the IP hasn't been pulled into ip/ yet. Re-enable below alongside
+    // the matching MACROS entries in librelane/config.yaml. Without this,
+    // the design will not pass wafer.space submission gates.
+    //
+    // (* keep *)
+    // gf180mcu_ws_ip__id chip_id ();
+    //
+    // (* keep *)
+    // gf180mcu_ws_ip__logo wafer_space_logo ();
 
 endmodule
 

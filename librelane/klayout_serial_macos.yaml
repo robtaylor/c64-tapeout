@@ -1,0 +1,26 @@
+# macOS-only KLayout signoff overlay: force serial workers.
+#
+# KLayout 0.30.x's parallel DRC runner has crashed (std::bad_cast across
+# workers) on the macOS build for designs of this size — KLayout #2339.
+# Running with workers: 1 sidesteps the crash. Serial is roughly 14x
+# slower so this is local-macOS only — Linux/CI keeps workers: max.
+#
+# The Makefile appends this file to the LibreLane config chain inside the
+# Darwin branch (alongside the tools/pmap-shim PATH prepend). The whole
+# *_OPTIONS dict is replaced on overlay, so every key must be re-specified
+# verbatim from config.yaml (only `workers` differs).
+
+KLAYOUT_DRC_OPTIONS:
+  decks: "all,-antenna,-density,-cup"
+  variant: ref::$PDK
+  workers: 1
+
+KLAYOUT_DENSITY_OPTIONS:
+  decks: "density"
+  variant: ref::$PDK
+  workers: 1
+
+KLAYOUT_ANTENNA_OPTIONS:
+  decks: "antenna"
+  variant: ref::$PDK
+  workers: 1

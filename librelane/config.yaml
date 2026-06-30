@@ -81,6 +81,12 @@ GRT_ALLOW_CONGESTION: true
 DRT_ANTENNA_REPAIR_ITERS: 10
 DRT_ANTENNA_REPAIR_MARGIN: 10
 
+# PDN strap layers (default to V=Metal2, H=Metal3 — the PDK exposes
+# Metal2 as the LEF METAL2 layer and Metal3 above; without these the
+# defaults collide and pdngen errors with PDN-0003).
+PDN_VERTICAL_LAYER: Metal2
+PDN_HORIZONTAL_LAYER: Metal3
+
 # PDN straps
 PDN_VWIDTH: 5
 PDN_HWIDTH: 5
@@ -135,35 +141,41 @@ KLAYOUT_FILLER_OPTIONS:
 MAGIC_EXT_UNIQUE: notopports
 
 MACROS:
-  gf180mcu_ws_ip__id:
-    gds:
-      - dir::../ip/gf180mcu_ws_ip__id/gds/gf180mcu_ws_ip__id.gds
-    lef:
-      - dir::../ip/gf180mcu_ws_ip__id/lef/gf180mcu_ws_ip__id.lef
-    vh:
-      - dir::../ip/gf180mcu_ws_ip__id/vh/gf180mcu_ws_ip__id.v
-    lib:
-      "*":
-        - dir::../ip/gf180mcu_ws_ip__id/lib/gf180mcu_ws_ip__id.lib
-    instances:
-      chip_id:
-        location: [26, 26]
-        orientation: N
+  # NOTE: chip_id and wafer_space_logo IP are cosmetic (decoration on the
+  # die) and not yet checked into this repo. PnR proceeds without them;
+  # re-enable when the IP is pulled into ip/. The padframe slot file may
+  # still reference them — they're marked IGNORE_DISCONNECTED_MODULES
+  # above, so a missing instance is non-fatal at the floorplan stage.
 
-  gf180mcu_ws_ip__logo:
-    gds:
-      - dir::../ip/gf180mcu_ws_ip__logo/gds/gf180mcu_ws_ip__logo.gds
-    lef:
-      - dir::../ip/gf180mcu_ws_ip__logo/lef/gf180mcu_ws_ip__logo.lef
-    vh:
-      - dir::../ip/gf180mcu_ws_ip__logo/vh/gf180mcu_ws_ip__logo.v
-    lib:
-      "*":
-        - dir::../ip/gf180mcu_ws_ip__logo/lib/gf180mcu_ws_ip__logo.lib
-    instances:
-      wafer_space_logo:
-        location: ["expr::$DIE_AREA[2] + -169.25", "expr::$DIE_AREA[3] + -169.25"]
-        orientation: N
+  # gf180mcu_ws_ip__id:           # TODO: re-enable after pulling IP
+  #   gds:
+  #     - dir::../ip/gf180mcu_ws_ip__id/gds/gf180mcu_ws_ip__id.gds
+  #   lef:
+  #     - dir::../ip/gf180mcu_ws_ip__id/lef/gf180mcu_ws_ip__id.lef
+  #   vh:
+  #     - dir::../ip/gf180mcu_ws_ip__id/vh/gf180mcu_ws_ip__id.v
+  #   lib:
+  #     "*":
+  #       - dir::../ip/gf180mcu_ws_ip__id/lib/gf180mcu_ws_ip__id.lib
+  #   instances:
+  #     chip_id:
+  #       location: [26, 26]
+  #       orientation: N
+
+  # gf180mcu_ws_ip__logo:         # TODO: re-enable after pulling IP
+  #   gds:
+  #     - dir::../ip/gf180mcu_ws_ip__logo/gds/gf180mcu_ws_ip__logo.gds
+  #   lef:
+  #     - dir::../ip/gf180mcu_ws_ip__logo/lef/gf180mcu_ws_ip__logo.lef
+  #   vh:
+  #     - dir::../ip/gf180mcu_ws_ip__logo/vh/gf180mcu_ws_ip__logo.v
+  #   lib:
+  #     "*":
+  #       - dir::../ip/gf180mcu_ws_ip__logo/lib/gf180mcu_ws_ip__logo.lib
+  #   instances:
+  #     _wafer_space_logo_disabled:
+  #       location: ["expr::$DIE_AREA[2] + -169.25", "expr::$DIE_AREA[3] + -169.25"]
+  #       orientation: N
 
   # 8 × OCD SRAM macros (8KB): 2 rows × 4 columns
   # Row 0: orientation N (power pins at top)
@@ -174,7 +186,7 @@ MACROS:
     lef:
       - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef
     vh:
-      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.blackbox.v
+      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__blackbox.v
     lib:
       "*_tt_025C_5v00":
         - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib
@@ -183,26 +195,27 @@ MACROS:
       "*_ss_125C_4v50":
         - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ss_125C_3v00.lib
     instances:
+      # Hierarchical names come from the genvar block in src/sram_wrapper.sv:
+      #   for (genvar i = 0; i < 8; i++) begin : macro
+      #     gf180mcu_..._sram1024x8m8wm1 macro_inst (...)
+      # Yosys preserves these as escaped identifiers (\macro[i].macro_inst).
+      #
       # Row 0 (orientation N)
-      i_chip_core.sram_u.macro_0: { location: [2000,  600], orientation: N }
-      i_chip_core.sram_u.macro_1: { location: [2350,  600], orientation: N }
-      i_chip_core.sram_u.macro_2: { location: [2700,  600], orientation: N }
-      i_chip_core.sram_u.macro_3: { location: [3050,  600], orientation: N }
+      "i_chip_core.sram_u.macro[0].macro_inst": { location: [2000,  600], orientation: N }
+      "i_chip_core.sram_u.macro[1].macro_inst": { location: [2350,  600], orientation: N }
+      "i_chip_core.sram_u.macro[2].macro_inst": { location: [2700,  600], orientation: N }
+      "i_chip_core.sram_u.macro[3].macro_inst": { location: [3050,  600], orientation: N }
       # Row 1 (orientation S)
-      i_chip_core.sram_u.macro_4: { location: [2000, 1166], orientation: S }
-      i_chip_core.sram_u.macro_5: { location: [2350, 1166], orientation: S }
-      i_chip_core.sram_u.macro_6: { location: [2700, 1166], orientation: S }
-      i_chip_core.sram_u.macro_7: { location: [3050, 1166], orientation: S }
+      "i_chip_core.sram_u.macro[4].macro_inst": { location: [2000, 1166], orientation: S }
+      "i_chip_core.sram_u.macro[5].macro_inst": { location: [2350, 1166], orientation: S }
+      "i_chip_core.sram_u.macro[6].macro_inst": { location: [2700, 1166], orientation: S }
+      "i_chip_core.sram_u.macro[7].macro_inst": { location: [3050, 1166], orientation: S }
 
 PDN_MACRO_CONNECTIONS:
-- "i_chip_core.sram_u.macro_0 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_1 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_2 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_3 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_4 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_5 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_6 VDD VSS VDD VSS"
-- "i_chip_core.sram_u.macro_7 VDD VSS VDD VSS"
+# Regex matches all 8 macro instances. PDN_MACRO_CONNECTIONS is treated
+# as regex by OpenROAD's pdngen — bracket-escaping in YAML strings is
+# fiddly, so we sidestep it with `.` (any char) and `\d` (digit).
+- '.*macro_inst VDD VSS VDD VSS'
 
 FP_MACRO_HORIZONTAL_HALO: 10
 FP_MACRO_VERTICAL_HALO: 10
