@@ -74,8 +74,16 @@ $(GHDL_VERILOG): $(wildcard rtl/*.vhd rtl/t65/*.vhd) vhdl.f | $(GHDL_WORK)
 		echo "GHDL-a: $$f"; \
 		$(GHDL) -a --std=08 -fsynopsys --workdir=$(GHDL_WORK) "$$f" || exit 1; \
 	done < vhdl.f
-	$(GHDL) --synth --std=08 -fsynopsys --workdir=$(GHDL_WORK) --out=verilog c64_system 2>build/ghdl_warnings.txt > $@
+	$(GHDL) --synth --std=08 -fsynopsys --workdir=$(GHDL_WORK) --out=verilog c64_system 2>build/ghdl_warnings.txt > $@.tmp
+	# Rename SystemVerilog reserved words emitted as identifiers by GHDL.
+	# T65 uses `break` as a VHDL signal name; Icarus rejects it (Yosys is fine).
+	perl -pe 's/\bbreak\b/break_sig/g' $@.tmp > $@
+	rm -f $@.tmp
 	@echo "GHDL synth: $$(wc -l < $@) lines of Verilog"
+
+sim-smoke: $(GHDL_VERILOG) ## Run cocotb smoke test on chip_core (Verilator)
+	cd cocotb && SIM=verilator uv run --with "cocotb>=2.0" python chip_core_tb.py
+.PHONY: sim-smoke
 
 synth-test: $(GHDL_VERILOG) ## Synthesize design with Yosys (no PDK, generic cells)
 	yosys -p " \
