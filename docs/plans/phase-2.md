@@ -196,6 +196,8 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 - The `.gitignore` `vendor` entry becomes dead once the symlink target is gone — remove it in this cleanup.
 - (This is also why the WS-P2-1 PULP IP lives in `ip/pulp/`, not `vendor/` — no collision, and `vendor/` is going away.)
 
+**Cosim model — DECISION (2026-07-01, Track A): built-in GPU `qspi_ram` peripheral.** The C64's main RAM is accessed nearly every cycle, so a CPU-side cosim model runs at Jacquard's `batch=1` almost continuously (~2.5 s/frame Metal, 8–13 s/frame CUDA/HIP — GPU speedup erased). The performant path is a **GPU-side** peripheral generalizing Jacquard's existing flash `FlashState` (already `data_width=1|4`, 4-lane, 24-bit addr, mode+dummy, SPI-mode-0 phase — matches our controller), adding enter-QPI (0x35), quad-write (0x38) into a writable store, and RAM init, behind a small `GpuBidirPeripheral` sub-trait (down-payment on Jacquard ADR 0017 Tier-2). Rob (Jacquard author) will land this in gpu-eda/jacquard; the general user-provided CPU `PeripheralModel` interface is a **fast-follow (Track B)**, off this repo's critical path. Full analysis: [`docs/spikes/jacquard-cosim-models.md`](../spikes/jacquard-cosim-models.md). Est. ~1.5–3 wk for Track A.
+
 **Tasks:**
 1. Confirm how released Jacquard is obtained/invoked (binary on PATH? nix? cargo/pip?) — **open, owner: Rob** — and record the exact invocation.
 2. Run post-PnR sim with the cocotb harness re-pointed at the gate-level netlist + SDF, driving the released Jacquard.
