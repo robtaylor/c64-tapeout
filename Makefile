@@ -98,6 +98,10 @@ sim-smoke: $(GHDL_VERILOG) ## Run cocotb smoke test on chip_core (Verilator)
 	cd cocotb && SIM=verilator uv run --with "cocotb>=2.0" python chip_core_tb.py
 .PHONY: sim-smoke
 
+sim-qspi: ## Run cocotb test on the standalone qspi_psram_ctrl (Verilator)
+	cd cocotb && SIM=verilator uv run --with "cocotb>=2.0" python qspi_psram_tb.py
+.PHONY: sim-qspi
+
 synth-test: $(GHDL_VERILOG) ## Synthesize design with Yosys (no PDK, generic cells)
 	yosys -p " \
 		read_verilog $(GHDL_VERILOG); \

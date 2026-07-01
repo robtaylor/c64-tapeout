@@ -15,7 +15,7 @@ deps/gf180mcu_ocd_ip_sram/
 .nix-shell-gcroot
 result
 
-# Jacquard vendor symlink
+# Jacquard vendor symlink (created on-demand by `make vendor`)
 vendor
 
 # Simulation
