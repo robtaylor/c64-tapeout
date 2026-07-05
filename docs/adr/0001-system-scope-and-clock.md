@@ -25,7 +25,7 @@ GF180MCU 9T cells at TT/25°C can close timing at 25 MHz comfortably (proven by 
 
 **Amendment (2026-05-26):** Originally specified ~8 MHz, but the proven cycle sequencer from fpga64_sid_iec requires 32 MHz. Changing pixel rate would require rewriting VIC-II line timing. 32 MHz is well within GF180 capability.
 
-**Amendment (2026-07-06):** The clock pad is now 64 MHz, and a single on-chip flip-flop divides it by two to produce the 32 MHz sequencer clock. The 32 MHz core (1 MHz CPU, cycle sequencer) is unchanged; the extra 64 MHz clock exists only to run the [ADR 0004](0004-external-qspi-psram.md) QSPI PSRAM controller at the frequency it needs for a 32 MHz SCK (`f_sck = f_clk / (2·(CLK_DIV+1))`, so 32 MHz SCK requires a 64 MHz controller clock). "Single clock domain at 32 MHz" in item 4 becomes two synchronous domains derived from one pad: a 2× multiple, so the 32 MHz signals the controller samples are stable across both 64 MHz edges and no asynchronous CDC synchronisers are needed. Still no PLL — the external oscillator feeds the 64 MHz pad, and the ÷2 flop is the only clocking logic. Rationale and the sequencer early-trigger scheme this enables are in `docs/plans/phase-2.md` WS-P2-2.
+**Amendment (2026-07-06):** The clock pad is now 64 MHz, and a single on-chip flip-flop divides it by two to produce the 32 MHz sequencer clock. The 32 MHz core (1 MHz CPU, cycle sequencer) is unchanged; the extra 64 MHz clock exists only to run the [ADR 0004](0004-external-qspi-psram.md) QSPI PSRAM controller at the frequency it needs for a 32 MHz SCK (`f_sck = f_clk / (2·(CLK_DIV+1))`, so 32 MHz SCK requires a 64 MHz controller clock). "Single clock domain at 32 MHz" in item 4 becomes two synchronous domains derived from one pad: a 2× multiple, so the 32 MHz signals the controller samples are stable across both 64 MHz edges and no asynchronous CDC synchronisers are needed. Still no PLL — the external oscillator feeds the 64 MHz pad, and the ÷2 flop is the only clocking logic. Rationale and the sequencer early-trigger scheme this enables are in `docs/plans/memory-integration.md`.
 5. **CIA selection**: CIA1 (keyboard matrix scanner, timer A/B, IRQ generation). CIA2 (VIC bank select, serial bus) excluded; VIC bank hardwired to bank 0.
 
 ## Alternatives considered
@@ -51,7 +51,7 @@ GF180MCU 9T cells at TT/25°C can close timing at 25 MHz comfortably (proven by 
 
 ## Links
 
-- `docs/plans/archive/phase-1.md` — phase-1 implementation plan (closed/archived)
-- `docs/plans/phase-2.md` — current phase roadmap; `docs/plans/memory-integration.md` — memory subsystem (clock, PSRAM, ZP/stack SRAM)
+- `docs/plans/archive/initial-core-bringup.md` — initial core bring-up (closed/archived)
+- `docs/plans/tapeout-roadmap.md` — current tapeout roadmap; `docs/plans/memory-integration.md` — memory subsystem (clock, PSRAM, ZP/stack SRAM)
 - ADR 0002 — VHDL synthesis strategy
 - ADR 0003 — memory architecture and bus adaptation

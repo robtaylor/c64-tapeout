@@ -1,6 +1,6 @@
-# Plan — Phase 2: External QSPI PSRAM + clean PnR
+# Plan — Tapeout roadmap: external QSPI PSRAM + clean PnR
 
-**Status:** Active (2026-06-30).
+**Status:** Active. The live tapeout roadmap (was `phase-2.md` until 2026-07-06). Memory-subsystem detail lives in [`memory-integration.md`](memory-integration.md); the initial core bring-up is archived at [`archive/initial-core-bringup.md`](archive/initial-core-bringup.md).
 
 ## Goal
 

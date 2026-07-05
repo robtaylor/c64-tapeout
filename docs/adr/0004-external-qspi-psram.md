@@ -65,7 +65,7 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 
    **Why these two pages, and why safe now:**
    - **Fixed addresses ⇒ a fixed carve-out captures 100 % of their traffic.** ZP is `$00xx` by the 6502 ISA; the stack is always `$01xx`. Neither relocates, so unlike the screen matrix (which moves via `$D018`) an on-die block is never bypassed. 6502 code is ZP-intensive (most addressing modes) and stack-intensive (`JSR`/`RTS`/IRQ), so these are the highest-value 512 bytes on the bus.
-   - **Two wins:** 1-cycle ZP/stack access, and their traffic leaves the QSPI bus — easing the VIC badline-cycle contention documented in phase-2.md finding (c).
+   - **Two wins:** 1-cycle ZP/stack access, and their traffic leaves the QSPI bus — easing the VIC badline-cycle contention documented in memory-integration.md finding (c).
    - **PnR-safe, unlike phase-1.** The phase-1 RePlAce divergence was the *3.3V OCD* macro on a 5V grid (floating VDD → PSM-0039). `fd_ip_sram`'s `_5v00`/`_5v50`/`_4v50` corners share VDD/VSS with the 5V standard cells, so the power grid is coherent. Two small macros add *placement + PDN* effort, not the floating-net failure.
 
    **Deliberately excluded** (so the record is explicit):
@@ -108,7 +108,7 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 
 - [ADR 0001 — system scope](0001-system-scope-and-clock.md)
 - [ADR 0003 — memory architecture (superseded by this ADR for main RAM)](0003-memory-architecture.md)
-- `docs/plans/phase-2.md` — workstreams to execute this pivot
+- `docs/plans/tapeout-roadmap.md` — workstreams to execute this pivot; `docs/plans/memory-integration.md` — memory subsystem detail
 - `src/qspi_psram_ctrl.sv` — controller module (to be written)
 
 ## Superseded decisions

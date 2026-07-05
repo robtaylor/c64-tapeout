@@ -1,6 +1,6 @@
 # Plan — Memory subsystem integration (phase-2 WS-P2-2)
 
-**Status:** Active (2026-07-06). The WS-P2-2 workstream of [phase-2](phase-2.md); extracted from the phase roadmap on 2026-07-06 so the memory design has its own home.
+**Status:** Active (2026-07-06). The WS-P2-2 workstream of the [tapeout roadmap](tapeout-roadmap.md); extracted from the roadmap on 2026-07-06 so the memory design has its own home.
 
 ## Goal
 
@@ -108,4 +108,4 @@ Open items to verify during implementation, not blockers: the 6510 processor por
 
 - [ADR 0001 — system scope + clock (64 MHz pad ÷2)](../adr/0001-system-scope-and-clock.md)
 - [ADR 0004 — external QSPI PSRAM + ZP/stack carve-out (§9)](../adr/0004-external-qspi-psram.md)
-- [phase-2 roadmap](phase-2.md)
+- [tapeout roadmap](tapeout-roadmap.md)
