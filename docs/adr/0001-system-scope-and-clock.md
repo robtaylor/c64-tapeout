@@ -51,6 +51,7 @@ GF180MCU 9T cells at TT/25°C can close timing at 25 MHz comfortably (proven by 
 
 ## Links
 
-- `docs/plans/phase-1.md` — implementation plan
+- `docs/plans/archive/phase-1.md` — phase-1 implementation plan (closed/archived)
+- `docs/plans/phase-2.md` — current phase roadmap; `docs/plans/memory-integration.md` — memory subsystem (clock, PSRAM, ZP/stack SRAM)
 - ADR 0002 — VHDL synthesis strategy
 - ADR 0003 — memory architecture and bus adaptation

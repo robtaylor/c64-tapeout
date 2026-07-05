@@ -1,6 +1,8 @@
 # Plan — Phase 1: RTL integration, PnR, and Jacquard simulation
 
-**Status:** Active.
+**Status:** Closed — complete 2026-06-30, archived 2026-07-06. Superseded by [phase-2](../phase-2.md).
+
+**Outcome.** WS1–WS4 shipped: Nix shell + LibreLane 3.0 on aarch64-darwin, the full C64 core wired through `chip_core`, cocotb smoke passing under Verilator, and GHDL→Yosys synth clean (255K cells). WS5 (PnR) reached OpenROAD global placement and then diverged — the 3.3V OCD SRAM macros float on the 5V cell library (PSM-0039). That fact drove the pivot to external QSPI PSRAM ([ADR 0004](../../adr/0004-external-qspi-psram.md)); [phase-2](../phase-2.md) picks up from there. WS6 (Jacquard) never started (blocked on a closed PnR). The per-workstream statuses below are the 2026-05-26 snapshot, kept as historical record — do not treat them as current.
 
 ## Goal
 
