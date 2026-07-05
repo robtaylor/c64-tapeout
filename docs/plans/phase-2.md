@@ -51,7 +51,9 @@ Verified against `c64_system.vhd` / `c64_buslogic.vhd` / `video_vicII_656x.vhd`.
 
 **(a) The real bottleneck today is the sequencer, not SCK.** `c64_system.vhd` runs a 32-state sequencer at 32 MHz (1 µs/period; states 0–15 ≈ VIC half, 16–31 ≈ CPU half), tuned for 1-cycle SRAM: `ramCE` pulses *late* — `CYCLE_VIC0` (state 12) and `CYCLE_CPUC` (state 28) — only **~3 clk32 cycles (~94 ns)** before the data-sample edge (`c64_system.vhd:432-433`). So the *current* budget is ~94 ns, far tighter than the ~400 ns hardware model — **but the address is stable for nearly the whole period**, so reworking the sequencer to trigger the PSRAM transaction at the *start* of each half-window (state 0/16) recovers the full **~500 ns**, comfortably inside a ~470 ns quad fast-read with no wait-states. This rework is the core WS-P2-2 deliverable.
 
-**(b) On-die ZP/stack is NOT load-bearing for timing — demoted to optional.** With the early-trigger rework, CPU random reads/writes get the full ~500 ns window (writes already hold `ramWE` for the whole 16-cycle CPU window, `c64_system.vhd:432`). The ZP/stack-hot argument is 6502 domain knowledge, not something the timing forces; a carve-out is cheap to add later (`c64_buslogic.vhd:162-165` already special-cases page 0) **if** profiling shows a perf/power win. **So we defer it and park the flops-vs-5V-SRAM-macro decision** — the earlier "512-byte hot-page macro" is no longer the driver.
+**(b) On-die ZP/stack is NOT load-bearing for timing — but is now included for perf + bus-contention relief.** With the early-trigger rework, CPU random reads/writes get the full ~500 ns window (writes already hold `ramWE` for the whole 16-cycle CPU window, `c64_system.vhd:432`). The ZP/stack-hot argument is 6502 domain knowledge, not something the timing forces; a carve-out is cheap (`c64_buslogic.vhd:162-165` already special-cases page 0).
+
+> **UPDATE 2026-07-05 — RESOLVED (in): on-die 5V SRAM ZP/stack carve-out.** No longer deferred. ZP (`$0000–$00FF`) + stack (`$0100–$01FF`) go on-die as **2 × `gf180mcu_fd_ip_sram__sram256x8m8wm1`** (5V-native, genuine `_5v00`/`_5v50`/`_4v50` corners). The motivation is not timing (the early-trigger already closes it) but (i) 1-cycle access to the two hottest fixed-address 6502 pages, and (ii) removing that traffic from the QSPI bus, easing the badline contention in finding (c). PnR-safe because the 5V macro shares VDD/VSS with the 5V cells (the phase-1 divergence was the *3.3V* OCD macro floating). See [ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision). The flops-vs-macro trade is settled: **macro** (2× sram256x8), not flops.
 
 **(c) The real pinch is VIC badlines — a *concurrency* problem, not a randomness one.** During a badline (once per 8 scanlines), VIC needs **two** main-RAM accesses in the same 1 µs cycle the CPU is halted for: the sequential 40-byte **c-access** burst (`VM+colCounter`, predictable) plus the scattered **g-access** stream. Two ~470 ns quad reads in ~1 µs = effectively **zero slack**, and there is **no existing memory-ready/wait-state handshake** (`baLoc`/`enableCpu` are driven by VIC badline logic, not a memory-ready signal). This — not CPU ZP/stack — is what actually motivates on-die buffering.
 
@@ -61,7 +63,7 @@ Verified against `c64_system.vhd` / `c64_buslogic.vhd` / `video_vicII_656x.vhd`.
 2. **VIC c-access line-buffer (~40 bytes, flops — no SRAM macro).** Prefetch the badline's sequential 40-byte c-access burst (address-predictable) so it isn't serialized against the per-cycle g-access. This is the buffering the access pattern genuinely requires, and it's small enough to be flops — keeping the clean cells-only PnR. Sprite s-access (3-byte bursts at arbitrary `MPtr*64`) is low-frequency; flag for timing follow-up once integration exists.
 3. **External QSPI PSRAM** for the bulk 64 KB (unchanged).
 4. **SCK target ~32–44 MHz quad** — with the early-trigger giving ~500 ns and the c-access buffered, ~32 MHz regains slack; pin down once the integrated sim exists.
-5. **Optional, deferred:** on-die ZP/stack carve-out (`c64_buslogic.vhd:162-165`) only if profiling motivates it; flops-vs-5V-SRAM-macro trade parked until then.
+5. **On-die 5V SRAM ZP/stack carve-out (RESOLVED 2026-07-05, was "optional/deferred").** 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` for page 0 (`$0000–$00FF`) + stack (`$0100–$01FF`); `c64_buslogic.vhd` decodes `$0000–$01FF` to the macros, everything else to `qspi_psram_ctrl`. 5V-native corners only (never alias a 3.3V lib under a 5V key). Screen matrix stays on the line-buffer (item 2); color RAM stays flops. See [ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision).
 
 **Decision (i) — RESOLVED 2026-07-01: VIC badline c-access line-buffer (over CPU wait-states).** A ~40-byte on-die flop buffer prefetches the badline's sequential c-access burst; the common-case path stays wait-state-free. This is committed (architecture item 2 above is no longer provisional).
 
@@ -106,7 +108,8 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 **Goal:** Wire the controller into `c64_system`'s existing `ramAddr`/`ramDin`/`ramDout`/`ramCE`/`ramWE` ports. Remove on-die SRAM entirely.
 
 **Tasks:**
-1. Remove `sram_wrapper` instantiation from `chip_core.sv`. Replace with `qspi_psram_ctrl`.
+1. Remove the bulk `sram_wrapper` instantiation from `chip_core.sv`. Replace with `qspi_psram_ctrl` for the main-RAM path.
+1b. **Instantiate the on-die ZP/stack SRAM ([ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision)):** 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` for page 0 (`$0000–$00FF`) + stack (`$0100–$01FF`). Add address decode in `c64_buslogic.vhd` so `$0000–$01FF` routes to the macros and all other addresses to `qspi_psram_ctrl` (page 0 is already special-cased at `c64_buslogic.vhd:162-165` — extend to `$0100–$01FF`). Note the 6510 CPU I/O port overlays `$0000`/`$0001` — the port logic must win over the SRAM at those two addresses.
 2. Add new pad signals: `psram_cs_n`, `psram_sck`, `psram_sio[3:0]`. Wire to bidir[33..38] (table in [ADR 0004 §2](../adr/0004-external-qspi-psram.md)).
 3. Update bidir output steering in `chip_core.sv`: drive CS#/SCK as outputs always; SIO[3:0] direction depends on the controller's `sio_oe` signal.
 4. Decide whether the cycle sequencer needs adjustment for PSRAM latency — **driven by the [Memory timing budget & VIC contention](#memory-timing-budget--vic-contention-gating-decision-for-ws-p2-2) section above.** Resolve the gating cycle-accurate-vs-functional decision first; it sets whether we need a prefetch line-buffer, brute-force SCK (~55 MHz for the cycle-faithful ~400 ns window), or CPU wait-states. Also verify how `video_vicII_656x.vhd` / `c64_system.vhd` route VIC phi1 fetches before pinning an SCK target.
@@ -125,26 +128,28 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 
 ### WS-P2-3 — LibreLane config cleanup
 
-**Goal:** Strip everything SRAM from the LibreLane config so the PnR floorplan is cells-only.
+**Goal:** Remove the *3.3V OCD bulk-SRAM* machinery from the LibreLane config, and register the *2× 5V `sram256x8`* ZP/stack macros ([ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision)) cleanly. The floorplan goes from "8 big 3.3V macros" to "2 small 5V macros" — near-cells-only, and PDN-coherent because the returning macros are 5V-native.
 
 **Tasks:**
 1. `librelane/config.yaml`:
-   - Remove `VERILOG_DEFINES: USE_SRAM_MACROS` (no more SRAM wrapper).
-   - Remove the `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` `MACROS:` entry.
-   - Remove the SRAM `IGNORE_DISCONNECTED_MODULES` entries.
-   - Tighten `DIE_AREA`/`CORE_AREA` — we no longer need 3500×4700 µm of core; estimate from a placement pass.
+   - Remove `VERILOG_DEFINES: USE_SRAM_MACROS` (the bulk `sram_wrapper` is gone; the ZP/stack macros are instantiated directly, not via the wrapper).
+   - Remove the `gf180mcu_ocd_ip_sram__sram1024x8m8wm1` `MACROS:` entry (3.3V OCD, retired).
+   - **Add** a `MACROS:` entry for 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` with genuine 5V libs (see task 6).
+   - Remove the *bulk* SRAM `IGNORE_DISCONNECTED_MODULES` entries; add any needed for the 2 new macros.
+   - Tighten `DIE_AREA`/`CORE_AREA` — far smaller than the old 3500×4700 µm (two `sram256x8` macros are tiny); estimate from a placement pass.
 2. `librelane/pdn_cfg.tcl`:
-   - Remove the `pdn_c64_sram` grid section. Keep stdcell grid + core ring + default macro grid.
+   - Remove the bulk `pdn_c64_sram` (8-macro) grid section. Keep stdcell grid + core ring.
+   - Add a small macro grid for the 2× `sram256x8` (or rely on the default macro grid if it straps them adequately) — these are 5V macros on the same rails as the cells, so the grid is coherent (no cross-voltage strapping).
 3. `deps/gf180mcu_ocd_ip_sram/` — gitignore stays; the dep is no longer needed but harmless to keep cloned.
 4. **`Makefile:185`** — drop `--cell-library tools/jacquard_cell_lib/ocd_sram_shim.v` from the Jacquard invocation (OCD-macro shim, dead once the macro is gone).
 5. **`CLAUDE.md`** — update the stale "Memory: 8 × OCD SRAM macros (8KB main RAM)" line to reflect ADR 0004 (external QSPI PSRAM, color RAM + ROMs on-die). It currently describes the superseded arch as current.
-6. ⚠ **Corner-aliasing guardrail (3.3V audit, 2026-07-01).** The removed OCD `MACROS:` block (`config.yaml:190-196`) registered the macro's **3.3V** libs (`__tt_025C_3v30/__ff_n40C_3v60/__ss_125C_3v00`) under **5V corner keys** (`*_tt_025C_5v00`/`*_ff_n40C_5v50`/`*_ss_125C_4v50`) — a physically false alias that quieted STA but left the 3.3V power domain (→ PSM-0039 floating VDD). If WS-P2-2 adopts the on-die 5V `gf180mcu_fd_ip_sram__sram512x8m8wm1` for ZP/stack, it MUST use that macro's genuine `_5v00`/`_5v50`/`_4v50` lib files under the matching keys — **never alias a 3.3V lib under a 5V key**. Re-running the 3.3V grep audit (search: `3v30|3v00|3v60`, `ocd`, corner-key vs lib-file mismatch) after cleanup should return only board-side PSRAM hits.
+6. **Register the ZP/stack macros with genuine 5V libs — corner-aliasing guardrail (3.3V audit, 2026-07-01; now the active path per ADR 0004 §9).** Add a `MACROS:` block for 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` using that macro's genuine `_5v00`/`_5v50`/`_4v50` lib files under the matching 5V corner keys. The removed OCD block (`config.yaml:190-196`) registered **3.3V** libs (`__tt_025C_3v30/__ff_n40C_3v60/__ss_125C_3v00`) under **5V corner keys** (`*_tt_025C_5v00`/`*_ff_n40C_5v50`/`*_ss_125C_4v50`) — a physically false alias that quieted STA but left the 3.3V power domain floating (→ PSM-0039). **Never repeat that: never alias a 3.3V lib under a 5V key.** Add the 2-macro PDN grid back to `pdn_cfg.tcl` (see task 2). Re-running the 3.3V grep audit (search: `3v30|3v00|3v60`, `ocd`, corner-key vs lib-file mismatch) after cleanup should return only board-side PSRAM hits — **no** on-die SRAM hits, since the ZP/stack macros are genuinely 5V.
 7. Re-run `make librelane-pdn` and trace through to PnR completion.
 
 **Deliverables:**
-- `librelane/config.yaml` SRAM-free
-- `librelane/pdn_cfg.tcl` SRAM-free
-- Successful run to at least `OpenROAD.GlobalPlacement` completion
+- `librelane/config.yaml` — OCD 3.3V SRAM removed, 2× 5V `sram256x8` registered with genuine 5V libs
+- `librelane/pdn_cfg.tcl` — bulk SRAM grid removed, 2-macro grid (or default) coherent on the 5V rails
+- Successful run to at least `OpenROAD.GlobalPlacement` completion (no PSM-0039 / RePlAce divergence)
 
 **Exit criteria:**
 - `make librelane-pdn` reaches `OpenROAD.DetailedRouting` without diverging

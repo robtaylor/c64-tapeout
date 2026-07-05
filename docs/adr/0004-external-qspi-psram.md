@@ -1,6 +1,6 @@
 # ADR 0004 — External QSPI PSRAM, supersedes on-die SRAM macros (ADR 0003)
 
-**Status:** Accepted (2026-06-30). Supersedes the main-RAM portion of [ADR 0003](0003-memory-architecture.md). ROM strategy in ADR 0003 remains in force.
+**Status:** Accepted (2026-06-30); amended 2026-07-05 — **hybrid memory**: the bulk 64 KB stays external QSPI PSRAM, but a 512 B on-die 5V SRAM array (zero page + stack) is carved back in (Decision §9). The original all-external wording is retained under [Superseded decisions](#superseded-decisions). Supersedes the main-RAM portion of [ADR 0003](0003-memory-architecture.md). ROM strategy in ADR 0003 remains in force.
 
 **TL;DR.** In the context of taping out a C64 subset on GF180MCU 9T 5V (`gf180mcu_fd_sc_mcu9t5v0`), facing a voltage mismatch between the 3.3V `gf180mcu_ocd_ip_sram` macros and the 5V cell library, and limited foundry alternatives (only 64x8–512x8 5V SRAM macros in `gf180mcu_fd_ip_sram`, capping at 4KB across 8 macros), we chose to move main RAM **off-die** to an external QSPI PSRAM accessed through 6 of our spare bidir pads, accepting the controller logic and board complexity in exchange for full 64 KB (the original C64 memory map) and a clean tapeout.
 
@@ -41,11 +41,11 @@ Three options were considered after the on-die SRAM plan ran into trouble during
    | bidir[38] | `psram_sio3` | bidir |
    | bidir[39] | spare        | — |
 
-3. **Drop on-die SRAM** entirely: remove the `sram_wrapper` instantiation, the OCD macro IP dep, the `MACROS:` SRAM entries, the SRAM PDN block, and the `USE_SRAM_MACROS` define. `src/sram_wrapper.sv` is retired (or left as a stub).
+3. **Drop the on-die *main-RAM* SRAM**: remove the `sram_wrapper` instantiation, the 3.3V OCD macro IP dep, the OCD `MACROS:` SRAM entries, the bulk SRAM PDN block, and the `USE_SRAM_MACROS` define. `src/sram_wrapper.sv` is retired (or left as a stub). The bulk 64 KB is served by the external PSRAM; a small on-die 5V SRAM for the two hottest fixed-address pages is retained per §9. *(This clause originally read "drop on-die SRAM **entirely**"; superseded 2026-07-05 — see [Superseded decisions](#superseded-decisions).)*
 
 4. **ROMs stay on-die** as synthesized LUT logic (KERNAL, BASIC, CHARGEN) — see ADR 0003 §2–4. They are not affected by this pivot.
 
-5. **Color RAM stays on-die** as flops (1024 × 4 bits → 512 B equivalent) — ADR 0003 §5 unchanged.
+5. **Color RAM stays on-die** as flops (1024 × 4 bits → 512 B equivalent) — ADR 0003 §5 unchanged. (The 2026-07-05 ZP/stack carve-out deliberately did *not* move color RAM into a macro — see §9.)
 
 6. **Controller spec**:
    - Single 24-bit byte address (16 MB max, although we only use 64 KB).
@@ -60,6 +60,17 @@ Three options were considered after the on-die SRAM plan ran into trouble during
    - Estimated core area: drops from ~12.9 mm² (current) to whatever the standard-cell logic actually wants. Re-tighten `DIE_AREA` and `PL_TARGET_DENSITY_PCT` after a placement pass.
 
 8. **Test board** (out of scope for this ADR — see phase-2 plan): QSPI PSRAM chip + 5V↔3.3V level shift on SIO/SCK/CS# if not using a 5V-tolerant PSRAM.
+
+9. **On-die 5V SRAM hot-page carve-out (zero page + stack)** *(added 2026-07-05)*. In addition to the external PSRAM, instantiate **2 × `gf180mcu_fd_ip_sram__sram256x8m8wm1`** (512 B total) on-die for **zero page `$0000–$00FF`** and **stack `$0100–$01FF`**. `c64_buslogic.vhd` decodes `$0000–$01FF` to these macros; every other address routes to `qspi_psram_ctrl`. Use the macros' **genuine 5V corner libs** (`tt_025C_5v00` / `ff_n40C_5v50` / `ss_125C_4v50`) under the matching 5V corner keys — **never alias a 3.3V lib under a 5V key** (cf. phase-2 WS-P2-3 item 6).
+
+   **Why these two pages, and why safe now:**
+   - **Fixed addresses ⇒ a fixed carve-out captures 100 % of their traffic.** ZP is `$00xx` by the 6502 ISA; the stack is always `$01xx`. Neither relocates, so unlike the screen matrix (which moves via `$D018`) an on-die block is never bypassed. 6502 code is ZP-intensive (most addressing modes) and stack-intensive (`JSR`/`RTS`/IRQ), so these are the highest-value 512 bytes on the bus.
+   - **Two wins:** 1-cycle ZP/stack access, and their traffic leaves the QSPI bus — easing the VIC badline-cycle contention documented in phase-2.md finding (c).
+   - **PnR-safe, unlike phase-1.** The phase-1 RePlAce divergence was the *3.3V OCD* macro on a 5V grid (floating VDD → PSM-0039). `fd_ip_sram`'s `_5v00`/`_5v50`/`_4v50` corners share VDD/VSS with the 5V standard cells, so the power grid is coherent. Two small macros add *placement + PDN* effort, not the floating-net failure.
+
+   **Deliberately excluded** (so the record is explicit):
+   - **Screen matrix** — relocates via `$D018` and is bypassed entirely in bitmap mode, so a fixed macro would sit idle for the demo workloads that stress the bus. VIC c-access is instead served by the location-agnostic ~40 B flop line-buffer (phase-2 decision (i)).
+   - **Color RAM** — stays flops (§5). 1024×4 into 8-bit macros wastes the upper nibble across two macros for no PnR benefit.
 
 ## Alternatives considered
 
@@ -79,7 +90,7 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 
 - **Test board complexity** — the chip is no longer self-contained for memory bring-up. Bringing the chip up at wafer.space means having the PSRAM populated on the test board *before* the silicon arrives. Mitigation: add a JTAG-style backdoor to preload PSRAM via the same pads when CS#/SCK can be host-driven (out of scope for the ADR; will go in phase-2 plan).
 
-- **PnR converges cleanly.** No in-die SRAM macros means no SRAM PDN tuning, no macro-placement constraints. RePlAce should pass. KLayout DRC should pass without the M3.2b wide-metal SRAM workaround.
+- **PnR stays convergent with two small 5V macros.** The bulk main-RAM SRAM array is gone, so the phase-1 floating-VDD divergence cannot recur. The §9 ZP/stack carve-out adds *two* `sram256x8` macros — `fd_ip_sram` 5V corners share VDD/VSS with the 5V cells, so the grid is coherent; this reintroduces modest macro placement + PDN effort but not the PSM-0039 failure. *(This bullet originally read "PnR converges cleanly. No in-die SRAM macros…"; superseded 2026-07-05 — see [Superseded decisions](#superseded-decisions).)*
 
 - **Test latency**: cocotb sim needs a PSRAM model. We'll vendor or write a `psram_bfm.v` that responds to the QSPI command set.
 
@@ -99,3 +110,31 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 - [ADR 0003 — memory architecture (superseded by this ADR for main RAM)](0003-memory-architecture.md)
 - `docs/plans/phase-2.md` — workstreams to execute this pivot
 - `src/qspi_psram_ctrl.sv` — controller module (to be written)
+
+## Superseded decisions
+
+> Retained verbatim for the record. **Superseded 2026-07-05** by Decision §9
+> (hybrid memory — a 512 B on-die 5V SRAM carve-out for zero page + stack).
+> The reasoning still holds for *bulk* main RAM (still external); it was written
+> before we distinguished bulk RAM from a tiny fixed-address hot-page carve-out,
+> and before confirming the 5V-native `fd_ip_sram` family is PnR-coherent on the
+> 5V grid.
+
+**Original Decision §3 (2026-06-30):**
+
+> 3. **Drop on-die SRAM** entirely: remove the `sram_wrapper` instantiation, the
+> OCD macro IP dep, the `MACROS:` SRAM entries, the SRAM PDN block, and the
+> `USE_SRAM_MACROS` define. `src/sram_wrapper.sv` is retired (or left as a stub).
+
+**Original "PnR converges cleanly" consequence (2026-06-30):**
+
+> - **PnR converges cleanly.** No in-die SRAM macros means no SRAM PDN tuning, no
+> macro-placement constraints. RePlAce should pass. KLayout DRC should pass
+> without the M3.2b wide-metal SRAM workaround.
+
+Why superseded: both statements assumed *zero* on-die SRAM. Decision §9 reintroduces
+two small **5V-native** `sram256x8` macros for the ZP/stack carve-out. This does
+*not* revive the phase-1 failure — that was the *3.3V* OCD macro's power domain
+floating on the 5V grid, not a property of on-die macros in general. The bulk
+main-RAM array stays gone; PnR now contends with two small coherent-VDD macros
+instead of none.
