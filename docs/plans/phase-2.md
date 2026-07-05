@@ -105,26 +105,40 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 
 ### WS-P2-2 — RTL integration
 
-**Goal:** Wire the controller into `c64_system`'s existing `ramAddr`/`ramDin`/`ramDout`/`ramCE`/`ramWE` ports. Remove on-die SRAM entirely.
+**Goal:** Wire the controller into `c64_system`'s existing `ramAddr`/`ramDin`/`ramDout`/`ramCE`/`ramWE` ports. Remove the bulk on-die SRAM; keep the 512 B ZP/stack carve-out ([ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision)).
 
-**Tasks:**
-1. Remove the bulk `sram_wrapper` instantiation from `chip_core.sv`. Replace with `qspi_psram_ctrl` for the main-RAM path.
-1b. **Instantiate the on-die ZP/stack SRAM ([ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision)):** 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` for page 0 (`$0000–$00FF`) + stack (`$0100–$01FF`). Add address decode in `c64_buslogic.vhd` so `$0000–$01FF` routes to the macros and all other addresses to `qspi_psram_ctrl` (page 0 is already special-cased at `c64_buslogic.vhd:162-165` — extend to `$0100–$01FF`). Note the 6510 CPU I/O port overlays `$0000`/`$0001` — the port logic must win over the SRAM at those two addresses.
-2. Add new pad signals: `psram_cs_n`, `psram_sck`, `psram_sio[3:0]`. Wire to bidir[33..38] (table in [ADR 0004 §2](../adr/0004-external-qspi-psram.md)).
-3. Update bidir output steering in `chip_core.sv`: drive CS#/SCK as outputs always; SIO[3:0] direction depends on the controller's `sio_oe` signal.
-4. Decide whether the cycle sequencer needs adjustment for PSRAM latency — **driven by the [Memory timing budget & VIC contention](#memory-timing-budget--vic-contention-gating-decision-for-ws-p2-2) section above.** Resolve the gating cycle-accurate-vs-functional decision first; it sets whether we need a prefetch line-buffer, brute-force SCK (~55 MHz for the cycle-faithful ~400 ns window), or CPU wait-states. Also verify how `video_vicII_656x.vhd` / `c64_system.vhd` route VIC phi1 fetches before pinning an SCK target.
-5. Update `c64_buslogic.vhd` if the ramCE/ramWE handshake needs to gate on a controller-ready signal (it currently assumes 1-cycle SRAM).
-6. Delete (or stub) `src/sram_wrapper.sv`.
+#### Design, grounded against the RTL (2026-07-06)
+
+Read `chip_core.sv`, `sram_wrapper.sv`, `c64_system.vhd`, `c64_buslogic.vhd`, and `qspi_psram_ctrl.sv` before writing this. Four things drive the design.
+
+**Clock (RESOLVED — 64 MHz pad ÷2 to core, see [ADR 0001 amendment 2026-07-06](../adr/0001-system-scope-and-clock.md#decision)).** The controller needs a 64 MHz clock for 32 MHz SCK (`qspi_psram_ctrl.sv:29`, min divide ÷2); the core sequencer runs at 32 MHz (`c64_system.vhd:148`). At 32 MHz the best SCK is 16 MHz (~940 ns/quad-read), which blows the window, so the pad clock becomes 64 MHz and a single flop in `chip_top`/`chip_core` divides it to the 32 MHz `clk32` the core already expects. The controller gets the raw 64 MHz. Two synchronous domains (2× related), no async CDC. `CLK_DIV=0` then gives 32 MHz SCK.
+
+**The ZP/stack physical split lives in `chip_core.sv`, not `c64_buslogic.vhd`.** `c64_system` exposes one location-agnostic RAM interface; `cs_ram` means "a RAM access," not "which chip." `c64_buslogic.vhd:162-165` (`when X"0"`) is the `$0xxx` memory-*map* decode (RAM vs ROM/IO), identical to the `when others` default, and does not change. In `chip_core.sv`, decode `is_lowpage = (ram_addr[15:9] == 0)` (i.e. `< $0200`) and route: reads mux `ram_din = is_lowpage ? zpstack_dout : psram_dout`; the ZP/stack SRAM takes `din ⇐ ram_dout`, `we`, `ce = ram_ce & is_lowpage`; the PSRAM controller's `ramCE` is gated with `~is_lowpage` so no QSPI transaction is issued for ZP/stack (that traffic staying off the bus is the point of the carve-out). The crossover (`sram.din ⇐ ram_dout`, `ram_din ⇐ sram.dout`) is exactly what `sram_wrapper` already does at `chip_core.sv:203-210`.
+
+**There is no wait-state path today, so the early-trigger has to close by construction.** `c64_system` samples read data combinationally (`c64_buslogic` `dataToCpu ⇐ ramData ⇐ ramDin`) at the CPU edge and never consumes the controller's `ready`/latency. The ZP/stack SRAM is 1-cycle synchronous like the old wrapper, so it is always ready in-window. For the PSRAM path, `ramCE` currently asserts late (`c64_system.vhd:433`: `cs_ram_int when sysCycle = CYCLE_VIC0 or cpu_cyc`, i.e. state 12 / state 28, ~94 ns before the sample edge). The controller triggers on a rising edge of `ramCE` (`qspi_psram_ctrl.sv:122,188`), latches the address, and runs one byte transaction. Move that assertion to the *start* of each access window so a ~470 ns quad read finishes inside the ~500 ns window with `ready` left unconsumed. The decision-(ii) stall safety-net stays deferred until the integrated sim can measure real slack.
+
+**Two accesses per period is the badline pinch, and the line-buffer is a second increment.** The sequencer does a VIC access (`CYCLE_VIC0`) and a CPU access (`CYCLE_CPUC`) per 32-state period, so up to two ~470 ns reads land in ~1 µs (near-zero slack, finding (c)). The ~40 B flop line-buffer for the badline c-access is what buys that slack back. It is more involved than the basic bus wiring, so stage it after a functional single-access integration proves out (see task 5).
+
+Open items to verify during implementation, not blockers: the 6510 processor port overlays `$0000`/`$0001` (handled in `cpu_6510.vhd` via `diIO/doIO`, `c64_system.vhd:423-424`) — confirm reads of `$00/$01` take the port value, not the ZP-SRAM byte, so the shadow write underneath is harmless; and confirm the address is stable at the new early-trigger point for both the VIC (`vicAddr`) and CPU (`cpuAddr`) phases.
+
+**Tasks (in dependency order):**
+1. **Clock.** In `chip_top.sv`/`chip_core.sv`, take the 64 MHz pad clock, add a ÷2 flop to produce `clk32` for `c64_system` and the ROMs/CIA, and route the 64 MHz clock to `qspi_psram_ctrl`. Confirm reset synchronisation across both.
+2. **`chip_core.sv` memory split.** Instantiate `qspi_psram_ctrl` (main-RAM path, `~is_lowpage` CE gate) and 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` for ZP+stack (`is_lowpage` CE). Add the `is_lowpage` decode and the `ram_din` mux. Remove the `sram_wrapper` instance.
+3. **Pads.** Add `psram_cs_n`/`psram_sck` (always output) at bidir[33..34] and `psram_sio[3:0]` (bidir, `out_drive ⇐ sio_o`, `oe ⇐ sio_oe`, `ie=1`, `sio_i ⇐ bidir_in`) at bidir[35..38], per [ADR 0004 §2](../adr/0004-external-qspi-psram.md). Update the `oe_mask`/`ie_mask`/`out_drive` block (`chip_core.sv:252-290`).
+4. **Sequencer early-trigger.** In `c64_system.vhd`, assert `ramCE` for PSRAM-region accesses at the start of the access window (one clean rising edge per access) instead of the late `CYCLE_VIC0`/`cpu_cyc` timing, so the quad read closes before the sample edge. Leave the ZP/stack path 1-cycle.
+5. **VIC c-access line-buffer (~40 B flops).** Prefetch the badline sequential c-access burst so it is not serialised against the g-access. Second increment; land after 1–4 pass a functional sim.
+6. **Cleanup.** Stub or delete `src/sram_wrapper.sv`; update `vhdl.f`/`rtl.f`; drop the `USE_SRAM_MACROS` wrapper path.
 
 **Deliverables:**
-- `chip_core.sv` updated
-- `c64_system.vhd` + `c64_buslogic.vhd` updated if sequencer/handshake changes
-- `vhdl.f` / `rtl.f` updated
+- `chip_top.sv`/`chip_core.sv` updated (clock divider, memory split, pads)
+- `c64_system.vhd` updated (early-trigger `ramCE`); `c64_buslogic.vhd` unchanged for the split
+- VIC c-access line-buffer module
+- `vhdl.f`/`rtl.f` updated
 
 **Exit criteria:**
-- `make synth-test` passes
-- `make sim-smoke` boots and reads first instruction from PSRAM (via BFM) instead of internal SRAM
-- KERNAL reset-vector fetch visible on the bidir pads as before
+- `make synth-test` passes (clean; the 2 SRAM macros as black boxes)
+- `make sim-smoke` boots and fetches the KERNAL reset vector from the PSRAM BFM (not internal SRAM), ZP/stack served on-die
+- Reset-vector fetch visible on the bidir pads as before
 
 ### WS-P2-3 — LibreLane config cleanup
 
