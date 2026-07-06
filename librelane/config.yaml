@@ -15,8 +15,15 @@ VERILOG_FILES:
 # C64 Verilog modules
 - dir::../rtl/mos6526.v
 
-# SRAM macro wrapper
-- dir::../src/sram_wrapper.sv
+# QSPI PSRAM controller + vendored PULP serial engine (bulk 64 KB RAM path)
+- dir::../ip/pulp/spi_master_clkgen.sv
+- dir::../ip/pulp/spi_master_tx.sv
+- dir::../ip/pulp/spi_master_rx.sv
+- dir::../ip/pulp/spi_master_controller.sv
+- dir::../rtl/qspi_psram_ctrl.sv
+
+# On-die 5V ZP/stack SRAM (2× sram256x8; instantiates the macro under USE_SRAM_MACROS)
+- dir::../src/zpstack_sram.sv
 
 # Synthesized ROMs
 - dir::../src/rom_kernal.sv
@@ -30,8 +37,8 @@ VERILOG_FILES:
 VERILOG_INCLUDE_DIRS:
 - dir::../src
 
-# Enable the GF180 OCD SRAM macro instantiation path in sram_wrapper.sv.
-# (Without this define, sram_wrapper falls back to a registered array —
+# Enable the GF180 5V SRAM macro instantiation path in zpstack_sram.sv.
+# (Without this define, zpstack_sram falls back to a registered array —
 # correct for cocotb/Yosys-generic but wrong for PnR.)
 VERILOG_DEFINES:
 - USE_SRAM_MACROS
@@ -76,19 +83,33 @@ CLOCK_PERIOD: 15.625
 PL_RESIZER_HOLD_SLACK_MARGIN: 0.35
 GRT_RESIZER_HOLD_SLACK_MARGIN: 0.3
 
-# Placement density — conservative; 8 SRAM macros + moderate logic
+# Placement density + cell padding (crib-proven values from test-tapeout-1).
+# The 20 KB of ROMs synthesized as LUTs make the core logic-dense despite the
+# large die, so keep density modest and spread cells out — this gives the
+# router headroom and legalisation room for antenna-diode insertion.
 PL_TARGET_DENSITY_PCT: 30
 GRT_ALLOW_CONGESTION: true
+GPL_CELL_PADDING: 2
+DPL_CELL_PADDING: 1
+# The LUT-ROM logic density drives routing congestion ~1.25; RePlAce's
+# routability-driven cell-inflation loop then can't converge and diverges
+# numerically (GPL-0305, +170% inflation → NaN). Disable that loop so global
+# placement settles at target density, and let GlobalRouting absorb the
+# congestion (GRT_ALLOW_CONGESTION above). Reset/enable nets (~2050 fanout)
+# remain high-fanout but route out with the congestion allowance.
+PL_ROUTABILITY_DRIVEN: false
 
 # Antenna repair
 DRT_ANTENNA_REPAIR_ITERS: 10
 DRT_ANTENNA_REPAIR_MARGIN: 10
 
-# PDN strap layers (default to V=Metal2, H=Metal3 — the PDK exposes
-# Metal2 as the LEF METAL2 layer and Metal3 above; without these the
-# defaults collide and pdngen errors with PDN-0003).
-PDN_VERTICAL_LAYER: Metal2
-PDN_HORIZONTAL_LAYER: Metal3
+# PDN strap layers: use the gf180 PDK defaults (V=Metal4, H=Metal5). This is
+# the silicon-proven 5V-SRAM stack from test-tapeout-1 / riscboy-180 — the
+# stdcell power grid rides high metals, leaving Metal2/Metal3 for the SRAM
+# macro's own power pins, which the SRAM Metal4 straps reach via the
+# Metal4↔Metal3 core-ring connect. The earlier Metal2/Metal3 override put the
+# grid on the same layers as the macro pins, so the SRAM straps could never
+# via down to them (PSM-0039 → RePlAce divergence, exactly as in phase-1).
 
 # PDN straps
 PDN_VWIDTH: 5
@@ -104,7 +125,12 @@ PDN_CORE_RING_VWIDTH: 25
 PDN_CORE_RING_HWIDTH: 25
 PDN_CORE_RING_CONNECT_TO_PADS: True
 PDN_ENABLE_PINS: False
-PDN_CORE_VERTICAL_LAYER: Metal2
+# Core ring on Metal4(V)/Metal3(H). The guarded core-ring connects in
+# pdn_cfg.tcl then add Metal4↔Metal3, Metal4↔Metal2 and Metal3↔Metal2, giving
+# the full Metal2↔Metal3↔Metal4↔Metal5 via stack that ties the SRAM Metal4
+# straps and the macro's Metal2/Metal3 power pins into the high-metal grid.
+# Matches the test-tapeout-1 / riscboy-180 5V-SRAM PDN topology.
+PDN_CORE_VERTICAL_LAYER: Metal4
 PDN_CORE_HORIZONTAL_LAYER: Metal3
 
 ERROR_ON_MAGIC_DRC: False
@@ -180,44 +206,39 @@ MACROS:
   #       location: ["expr::$DIE_AREA[2] + -169.25", "expr::$DIE_AREA[3] + -169.25"]
   #       orientation: N
 
-  # 8 × OCD SRAM macros (8KB): 2 rows × 4 columns
-  # Row 0: orientation N (power pins at top)
-  # Row 1: orientation S (power pins at bottom, meeting row 0)
-  gf180mcu_ocd_ip_sram__sram1024x8m8wm1:
+  # 2 × 5V SRAM macros (512 B ZP/stack): gf180mcu_fd_ip_sram__sram256x8m8wm1.
+  # 5V-native — genuine tt_025C_5v00 / ff_n40C_5v50 / ss_125C_4v50 corners
+  # (no 3.3V→5V aliasing; that mismatch was the phase-1 PnR divergence, see
+  # docs/plans/archive/initial-core-bringup.md + ADR 0004 §9). Views come from
+  # the PDK (libs.ref), not deps/. Macro is 431.86 × 340.88 µm.
+  gf180mcu_fd_ip_sram__sram256x8m8wm1:
     gds:
-      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.gds
+      - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/gds/gf180mcu_fd_ip_sram__sram256x8m8wm1.gds
     lef:
-      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1.lef
+      - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/lef/gf180mcu_fd_ip_sram__sram256x8m8wm1.lef
     vh:
-      - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__blackbox.v
+      - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/verilog/gf180mcu_fd_ip_sram__sram256x8m8wm1__blackbox.v
     lib:
       "*_tt_025C_5v00":
-        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__tt_025C_3v30.lib
+        - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/lib/gf180mcu_fd_ip_sram__sram256x8m8wm1__tt_025C_5v00.lib
       "*_ff_n40C_5v50":
-        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ff_n40C_3v60.lib
+        - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/lib/gf180mcu_fd_ip_sram__sram256x8m8wm1__ff_n40C_5v50.lib
       "*_ss_125C_4v50":
-        - dir::../deps/gf180mcu_ocd_ip_sram/cells/gf180mcu_ocd_ip_sram__sram1024x8m8wm1/gf180mcu_ocd_ip_sram__sram1024x8m8wm1__ss_125C_3v00.lib
+        - dir::../gf180mcu/gf180mcuD/libs.ref/gf180mcu_fd_ip_sram/lib/gf180mcu_fd_ip_sram__sram256x8m8wm1__ss_125C_4v50.lib
     instances:
-      # Hierarchical names come from the genvar block in src/sram_wrapper.sv:
-      #   for (genvar i = 0; i < 8; i++) begin : macro
-      #     gf180mcu_..._sram1024x8m8wm1 macro_inst (...)
+      # Hierarchical names come from the genvar block in src/zpstack_sram.sv:
+      #   for (genvar i = 0; i < 2; i++) begin : macro
+      #     gf180mcu_fd_ip_sram__sram256x8m8wm1 macro_inst (...)
       # Yosys preserves these as escaped identifiers (\macro[i].macro_inst).
-      #
-      # Row 0 (orientation N)
-      "i_chip_core.sram_u.macro[0].macro_inst": { location: [2000,  600], orientation: N }
-      "i_chip_core.sram_u.macro[1].macro_inst": { location: [2350,  600], orientation: N }
-      "i_chip_core.sram_u.macro[2].macro_inst": { location: [2700,  600], orientation: N }
-      "i_chip_core.sram_u.macro[3].macro_inst": { location: [3050,  600], orientation: N }
-      # Row 1 (orientation S)
-      "i_chip_core.sram_u.macro[4].macro_inst": { location: [2000, 1166], orientation: S }
-      "i_chip_core.sram_u.macro[5].macro_inst": { location: [2350, 1166], orientation: S }
-      "i_chip_core.sram_u.macro[6].macro_inst": { location: [2700, 1166], orientation: S }
-      "i_chip_core.sram_u.macro[7].macro_inst": { location: [3050, 1166], orientation: S }
+      # Placed side-by-side in the lower core, well clear of the 442 µm core
+      # edge and each other (431.86 µm wide + 10 µm halo → 600 µm pitch).
+      "i_chip_core.zpstack_u.macro[0].macro_inst": { location: [1600, 900], orientation: N }
+      "i_chip_core.zpstack_u.macro[1].macro_inst": { location: [2200, 900], orientation: N }
 
 PDN_MACRO_CONNECTIONS:
-# Regex matches all 8 macro instances. PDN_MACRO_CONNECTIONS is treated
-# as regex by OpenROAD's pdngen — bracket-escaping in YAML strings is
-# fiddly, so we sidestep it with `.` (any char) and `\d` (digit).
+# Regex matches both macro instances. PDN_MACRO_CONNECTIONS is treated as
+# regex by OpenROAD's pdngen — bracket-escaping in YAML strings is fiddly,
+# so we sidestep it with `.` (any char). Macro power pins are VDD/VSS.
 - '.*macro_inst VDD VSS VDD VSS'
 
 FP_MACRO_HORIZONTAL_HALO: 10

@@ -1,10 +1,10 @@
-# PDN configuration for C64 tapeout (GF180MCU, 8 × OCD SRAM 1024×8).
+# PDN configuration for C64 tapeout (GF180MCU, 2 × 5V SRAM 256×8 ZP/stack).
 #
 # Boilerplate (voltage domain + stdcell grid + core ring + default macro
 # grid) is adapted verbatim from the LibreLane reference pdn_cfg.tcl
 # (Apache-2.0, Copyright 2025 LibreLane Contributors). Project-specific
-# additions: the sram_pdn_ns proc that lays Metal4 straps over our
-# 8 OCD SRAM macros, and the macro enumeration that follows.
+# addition: the pdn_c64_sram grid that lays Metal4 straps over the 2 on-die
+# 5V SRAM macros (bulk RAM is off-die QSPI PSRAM, ADR 0004 §9).
 
 source $::env(SCRIPTS_DIR)/openroad/common/io.tcl
 source $::env(SCRIPTS_DIR)/openroad/common/set_global_connections.tcl
@@ -192,30 +192,44 @@ add_pdn_connect \
     -layers "$::env(PDN_VERTICAL_LAYER) $::env(PDN_HORIZONTAL_LAYER)"
 
 # ---------------------------------------------------------------------
-# 8 × OCD SRAM 1024×8 macros — Metal4 straps
+# 2 × 5V SRAM 256×8 macros (ZP/stack) — Metal4 straps
 # ---------------------------------------------------------------------
-# Use -cells to match by macro cell type rather than instance name —
-# this avoids the Tcl/pdngen escape trouble with Yosys-escaped Verilog
-# identifiers (\[0\], etc.) that breaks the -instances form.
+# Recipe adopted from the silicon-proven sram_pdn_ns from
+# wren6991/riscboy-180 (via test-tapeout-1 librelane/pdn/pdn_5v_sram.tcl),
+# which ran on the foundry-5V sramNxx8 family — exactly the macro this uses.
+# The two connects tie the macro's Metal2/Metal3 power pins into the grid;
+# the Metal4 straps deliver power over the macro and reach Metal3 via the
+# Metal4↔Metal3 core-ring connect (PDN_CORE_VERTICAL_LAYER=Metal4).
+#   - bracket straps: 2 GROUND Metal4 stripes on the macro W/E edges
+#     (pitch 432 ≈ macro width 431.86 µm)
+#   - internal grid : 7 denser Metal4 stripes across the macro interior
+# Use -cells (not -instances): the genvar block in src/zpstack_sram.sv
+# yields Yosys-escaped names (macro[0].macro_inst) that break -instances;
+# -cells covers both macros since they are the same cell type.
 define_pdn_grid \
     -macro \
-    -cells gf180mcu_ocd_ip_sram__sram1024x8m8wm1 \
+    -cells gf180mcu_fd_ip_sram__sram256x8m8wm1 \
     -name pdn_c64_sram \
     -starts_with POWER \
     -halo "$::env(PDN_HORIZONTAL_HALO) $::env(PDN_VERTICAL_HALO)"
 
+# Grid V/H are the gf180 defaults Metal4/Metal5, so these are distinct:
+#   Metal4↔Metal5 ties the SRAM Metal4 straps to the stdcell Metal5 H-grid;
+#   Metal4↔Metal3 vias them down to the macro's Metal3 power pins. (With the
+#   old Metal2/Metal3 grid override both collapsed to Metal2-Metal3 → PDN-0186
+#   and left the macro pins unreachable.)
 add_pdn_connect -grid pdn_c64_sram \
     -layers "$::env(PDN_VERTICAL_LAYER) $::env(PDN_HORIZONTAL_LAYER)"
-# Bridge stdcell straps (Metal4 below if set up) to SRAM Metal3 pins.
-# Skip when redundant with the V/H connect above (V=Metal2, H=Metal3 →
-# `Metal2 Metal3` already covers Metal2-Metal3).
-if { $::env(PDN_VERTICAL_LAYER) != "Metal3" && $::env(PDN_HORIZONTAL_LAYER) != "Metal3" } {
-    add_pdn_connect -grid pdn_c64_sram \
-        -layers "$::env(PDN_VERTICAL_LAYER) Metal3"
-}
+add_pdn_connect -grid pdn_c64_sram \
+    -layers "$::env(PDN_VERTICAL_LAYER) Metal3"
 
-# Light Metal4 straps over the OCD SRAM macro footprint. Pitch is
-# roomy — this is signoff PDN, not custom power routing.
+# Bracket the macro with two GROUND Metal4 straps on its W/E edges.
 add_pdn_stripe -grid pdn_c64_sram -layer Metal4 \
-    -width 4 -offset 20 -spacing 0.28 \
-    -pitch 60 -starts_with GROUND -number_of_straps 4
+    -width 2.36 -offset 1.18 -spacing 0.28 \
+    -pitch 432 -starts_with GROUND -number_of_straps 2
+
+# The bracket straps block the top-level PDN at Metal4, so add a denser
+# internal Metal4 grid to keep the macro's power integrity.
+add_pdn_stripe -grid pdn_c64_sram -layer Metal4 \
+    -width 4 -offset 46 -spacing 0.28 \
+    -pitch 50 -starts_with GROUND -number_of_straps 7

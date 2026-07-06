@@ -30,17 +30,30 @@ create_clock {*}$port_args -name $clock_port -period $::env(CLOCK_PERIOD)
 # CIA, and ROMs run on clk32, not the raw 64 MHz pad clock, so the core is only
 # timed if this generated clock exists; the QSPI PSRAM controller stays on the
 # 64 MHz master. See ADR 0001 (2026-07-06) and docs/plans/memory-integration.md.
-# NOTE (WS-P2-3): confirm the divider Q-pin path on the first PnR run — flatten
-# and cell renaming may change it; the guard below WARNs rather than silently
-# leaving the core unconstrained.
-set clk32_div_q [get_pins -quiet {*clk32_div*/Q}]
+# WS-P2-3: synthesis renames the divider flop to a generic name (e.g. _70125_),
+# so the RTL name `clk32_div` does NOT survive — but the NET it drives keeps the
+# stable RTL-hierarchy name `i_chip_core.c64_u.buslogic.clk` (chip_core's clk32
+# fans into c64_system → c64_buslogic.clk, clocking ~6k core flops). Locate the
+# divider's Q pin via that net's driver, so the generated clock survives every
+# resynthesis. Without it, the 6k-fanout clk32 net is treated as an ordinary
+# signal — leaving the core unconstrained AND causing routability congestion at
+# GlobalPlacement (GPL-0305 divergence).
+set clk32_net [get_nets -quiet {*c64_u.buslogic.clk}]
+set clk32_div_q ""
+if { [llength $clk32_net] > 0 } {
+    set clk32_div_q [get_pins -quiet -of_objects $clk32_net -filter {direction == output}]
+}
 if { [llength $clk32_div_q] > 0 } {
+    # Source the generated clock from the SAME object the master clock is
+    # defined on ($port_args = clk_pad/Y pin when CLOCK_PORT != CLOCK_NET),
+    # not the clk_PAD port — otherwise STA can't trace clk32 back to its
+    # master (STA-1060 "no master clock found").
     create_generated_clock -name clk32 -divide_by 2 \
-        -source [lindex [get_ports [lindex $::env(CLOCK_PORT) 0]] 0] \
+        -source [lindex $port_args 0] \
         [lindex $clk32_div_q 0]
     puts "\[INFO] Generated core clock clk32 (/2) on [lindex $clk32_div_q 0]"
 } else {
-    puts "\[WARNING] clk32 divider pin (*clk32_div*/Q) not found — core clock unconstrained. WS-P2-3 must fix the generated-clock pin path."
+    puts "\[WARNING] clk32 net (*c64_u.buslogic.clk) not found — core clock unconstrained. WS-P2-3 must fix the generated-clock net path."
 }
 
 set input_delay_value [expr $::env(CLOCK_PERIOD) * $::env(IO_DELAY_CONSTRAINT) / 100]
