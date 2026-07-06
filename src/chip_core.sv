@@ -7,8 +7,10 @@
 //   - Synthesized ROMs (KERNAL, BASIC, chargen)
 //   - Pad I/O steering
 //
-// Clock: 32 MHz (from pad). Internal 32-state sequencer gives
-// ~1 MHz CPU and ~8 MHz pixel rate (matching real C64).
+// Clock: 64 MHz pad, divided by 2 on-chip to the 32 MHz C64 system
+// clock (clk32). The 32-state sequencer on clk32 gives ~1 MHz CPU and
+// ~8 MHz pixel rate (matching real C64). The raw 64 MHz `clk` is
+// reserved for the QSPI PSRAM controller (ADR 0001, 2026-07-06 amend).
 //
 // Pad allocation (1×1 slot, 40 bidir pads):
 //   bidir[0]     — heartbeat (1 Hz from counter)
@@ -111,11 +113,26 @@ module chip_core #(
     wire        cpu_rw_dbg;
 
     // -----------------------------------------------------------------
+    // Clock divider: `clk` is the 64 MHz pad clock; clk32 = clk/2 is the
+    // 32 MHz C64 system clock (ADR 0001, 2026-07-06 amendment). The raw
+    // 64 MHz `clk` will drive the QSPI PSRAM controller; clk32 drives the
+    // C64 core, CIA, ROMs, and housekeeping counters.
+    // -----------------------------------------------------------------
+    reg clk32_div;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            clk32_div <= 1'b0;
+        else
+            clk32_div <= ~clk32_div;
+    end
+    wire clk32 = clk32_div;
+
+    // -----------------------------------------------------------------
     // C64 system (VHDL — T65 + VIC-II + bus logic + sequencer)
     // CIA1 interface exposed as ports (mos6526 instantiated below)
     // -----------------------------------------------------------------
     c64_system c64_u (
-        .clk32       (clk),
+        .clk32       (clk32),
         .reset_n     (rst_n),
 
         .ramAddr     (ram_addr),
@@ -153,10 +170,10 @@ module chip_core #(
     // -----------------------------------------------------------------
     // CIA1 (Verilog — mos6526)
     // -----------------------------------------------------------------
-    // TOD clock: ~50 Hz for PAL
+    // TOD clock: ~50 Hz for PAL (counted on the 32 MHz core clock)
     reg todclk;
     reg [19:0] tod_counter;
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk32 or negedge rst_n) begin
         if (!rst_n) begin
             todclk <= 1'b0;
             tod_counter <= '0;
@@ -171,7 +188,7 @@ module chip_core #(
     end
 
     mos6526 cia1_u (
-        .clk    (clk),
+        .clk    (clk32),
         .mode   (1'b0),
         .phi2_p (cia_phi2_p),
         .phi2_n (cia_phi2_n),
@@ -231,7 +248,7 @@ module chip_core #(
     // Heartbeat counter (1 Hz at 32 MHz → bit 24)
     // -----------------------------------------------------------------
     reg [24:0] heartbeat_ctr;
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk32 or negedge rst_n) begin
         if (!rst_n)
             heartbeat_ctr <= '0;
         else

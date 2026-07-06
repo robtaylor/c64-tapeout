@@ -62,12 +62,15 @@ IGNORE_DISCONNECTED_MODULES:
 - gf180mcu_ws_ip__id
 - gf180mcu_ws_ip__logo
 
-# Clock: 32 MHz (31.25 ns period) — C64 system clock. ADR 0001.
-# The 32-state cycle sequencer divides this into ~1 MHz CPU and
-# ~8 MHz pixel rate, matching the real C64's timing.
+# Clock: 64 MHz pad (15.625 ns) is the master. ADR 0001 (2026-07-06 amend).
+# chip_core divides it by 2 to the 32 MHz C64 system clock (clk32); the
+# 32-state sequencer then gives ~1 MHz CPU and ~8 MHz pixel. The QSPI PSRAM
+# controller runs on the 64 MHz master. chip_top.sdc declares clk32 as a
+# generated (/2) clock so the core is timed — see the SDC and
+# docs/plans/memory-integration.md.
 CLOCK_PORT: clk_PAD
 CLOCK_NET: clk_pad/Y
-CLOCK_PERIOD: 31.25
+CLOCK_PERIOD: 15.625
 
 # Hold margin
 PL_RESIZER_HOLD_SLACK_MARGIN: 0.35

@@ -70,8 +70,11 @@ async def reset(dut, hold_ns: int = 200) -> None:
 async def test_boot_smoke(dut):
     """Reset, run for ~5000 32 MHz clocks, observe vital signs."""
 
-    # 32 MHz = 31.25 ns period
-    cocotb.start_soon(Clock(dut.clk, 31250, unit="ps").start())
+    # 64 MHz pad clock = 15.625 ns period; chip_core divides by 2 to the
+    # 32 MHz C64 system clock (ADR 0001, 2026-07-06 amendment). 15625 ps is
+    # odd on the 1 ps grid, so split the duty (7813 high / 7812 low) via
+    # period_high to keep the frequency exactly 64 MHz (as in qspi_psram_tb).
+    cocotb.start_soon(Clock(dut.clk, 15625, unit="ps", period_high=7813).start())
 
     await reset(dut, hold_ns=500)
     await RisingEdge(dut.clk)

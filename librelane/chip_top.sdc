@@ -25,6 +25,24 @@ if { $::env(CLOCK_PORT) == $::env(CLOCK_NET) } {
 puts "\[INFO] Using clock $clock_port..."
 create_clock {*}$port_args -name $clock_port -period $::env(CLOCK_PERIOD)
 
+# Generated 32 MHz core clock: clk32 = master / 2, produced by the chip_core
+# clock divider (reg clk32_div). After the WS-P2-2 clock rework the C64 core,
+# CIA, and ROMs run on clk32, not the raw 64 MHz pad clock, so the core is only
+# timed if this generated clock exists; the QSPI PSRAM controller stays on the
+# 64 MHz master. See ADR 0001 (2026-07-06) and docs/plans/memory-integration.md.
+# NOTE (WS-P2-3): confirm the divider Q-pin path on the first PnR run — flatten
+# and cell renaming may change it; the guard below WARNs rather than silently
+# leaving the core unconstrained.
+set clk32_div_q [get_pins -quiet {*clk32_div*/Q}]
+if { [llength $clk32_div_q] > 0 } {
+    create_generated_clock -name clk32 -divide_by 2 \
+        -source [lindex [get_ports [lindex $::env(CLOCK_PORT) 0]] 0] \
+        [lindex $clk32_div_q 0]
+    puts "\[INFO] Generated core clock clk32 (/2) on [lindex $clk32_div_q 0]"
+} else {
+    puts "\[WARNING] clk32 divider pin (*clk32_div*/Q) not found — core clock unconstrained. WS-P2-3 must fix the generated-clock pin path."
+}
+
 set input_delay_value [expr $::env(CLOCK_PERIOD) * $::env(IO_DELAY_CONSTRAINT) / 100]
 set output_delay_value [expr $::env(CLOCK_PERIOD) * $::env(IO_DELAY_CONSTRAINT) / 100]
 puts "\[INFO] Setting output delay to: $output_delay_value"
