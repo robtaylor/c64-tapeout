@@ -168,6 +168,17 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 
 **Exit criteria:** Document committed. Hardware not built in this phase.
 
+### WS-P2-8 — CI (regression gate)
+
+**Goal:** A GitHub Actions workflow that runs the RTL checks on every push/PR so regressions surface automatically. The repo currently has no `.github/workflows`.
+
+**Tasks:**
+1. Workflow running, in the nix dev shell for consistency: `make synth-test` (Yosys clean), `make sim-smoke`, `make sim-qspi`. Cache the nix store + `~/.cache` to keep runs fast.
+2. Decide the runner — the nix shell + GHDL/Yosys/Verilator is Linux-friendly; a `ubuntu-latest` runner with `DeterminateSystems/nix-installer-action` is the low-friction path (crib from test-tapeout-1's CI).
+3. Gate `main` on it once green.
+
+**Exit criteria:** push/PR triggers the workflow; `synth-test` + both sims pass on a clean checkout.
+
 ## Dependencies between workstreams
 
 ```
