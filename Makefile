@@ -106,7 +106,12 @@ synth-test: $(GHDL_VERILOG) ## Synthesize design with Yosys (no PDK, generic cel
 	yosys -p " \
 		read_verilog $(GHDL_VERILOG); \
 		read_verilog -sv rtl/mos6526.v; \
-		read_verilog -sv src/sram_wrapper.sv; \
+		read_verilog -sv ip/pulp/spi_master_clkgen.sv; \
+		read_verilog -sv ip/pulp/spi_master_tx.sv; \
+		read_verilog -sv ip/pulp/spi_master_rx.sv; \
+		read_verilog -sv ip/pulp/spi_master_controller.sv; \
+		read_verilog -sv rtl/qspi_psram_ctrl.sv; \
+		read_verilog -sv src/zpstack_sram.sv; \
 		read_verilog -sv src/rom_kernal.sv; \
 		read_verilog -sv src/rom_basic.sv; \
 		read_verilog -sv src/rom_chargen.sv; \

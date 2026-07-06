@@ -70,6 +70,10 @@ module chip_core #(
     localparam int PAD_CPU_RW    = 24;
     localparam int PAD_ADDR_HI0  = 25;
     localparam int PAD_ADDR_HI7  = 32;
+    // QSPI PSRAM pads (ADR 0004 §2)
+    localparam int PAD_PSRAM_CSN  = 33;
+    localparam int PAD_PSRAM_SCK  = 34;
+    localparam int PAD_PSRAM_SIO0 = 35;  // sio1..3 = +1..+3; bidir[39] spare
 
     // -----------------------------------------------------------------
     // C64 system ↔ memory/ROM signals
@@ -79,6 +83,17 @@ module chip_core #(
     wire [7:0]  ram_dout;
     wire        ram_ce;
     wire        ram_we;
+
+    // Memory split: $0000-$01FF on-die ZP/stack SRAM, else external QSPI PSRAM
+    wire        is_lowpage;
+    wire [7:0]  zp_rdata;      // on-die ZP/stack SRAM read data
+    wire [7:0]  psram_rdata;   // external QSPI PSRAM read data
+    wire        psram_ready;   // controller done strobe (unconsumed for now)
+    wire        psram_cs_n;
+    wire        psram_sck;
+    wire [3:0]  psram_sio_o;
+    wire [3:0]  psram_sio_oe;
+    wire [3:0]  psram_sio_i;
 
     wire [15:0] rom_addr;
     wire        rom_cs_kernal;
@@ -215,15 +230,38 @@ module chip_core #(
     );
 
     // -----------------------------------------------------------------
-    // 8KB SRAM (8 × OCD macros)
+    // Memory: on-die 5V ZP/stack SRAM ($0000-$01FF) + external QSPI PSRAM
+    // (bulk 64 KB). ADR 0004 §9. ram_din muxes on-die vs PSRAM; the PSRAM
+    // controller is only triggered for non-low-page accesses (keeping that
+    // traffic off the QSPI bus is the point of the carve-out).
     // -----------------------------------------------------------------
-    sram_wrapper sram_u (
-        .clk   (clk),
-        .addr  (ram_addr[12:0]),
-        .din   (ram_dout),
-        .dout  (ram_din),
-        .we    (ram_we),
-        .ce    (ram_ce)
+    assign is_lowpage  = (ram_addr[15:9] == 7'b0);   // $0000-$01FF
+    assign ram_din     = is_lowpage ? zp_rdata : psram_rdata;
+    assign psram_sio_i = bidir_in[PAD_PSRAM_SIO0 +: 4];
+
+    zpstack_sram zpstack_u (
+        .clk  (clk32),
+        .addr (ram_addr[8:0]),
+        .din  (ram_dout),           // CPU write data -> memory
+        .dout (zp_rdata),           // memory read data -> CPU
+        .we   (ram_we),
+        .ce   (ram_ce & is_lowpage)
+    );
+
+    qspi_psram_ctrl psram_u (
+        .clk     (clk),             // 64 MHz -> 32 MHz SCK (CLK_DIV=0)
+        .rst_n   (rst_n),
+        .ramAddr (ram_addr),
+        .ramDin  (ram_dout),        // CPU write data -> memory
+        .ramCE   (ram_ce & ~is_lowpage),
+        .ramWE   (ram_we),
+        .ramDout (psram_rdata),     // memory read data -> CPU
+        .ready   (psram_ready),
+        .cs_n    (psram_cs_n),
+        .sck     (psram_sck),
+        .sio_o   (psram_sio_o),
+        .sio_oe  (psram_sio_oe),
+        .sio_i   (psram_sio_i)
     );
 
     // -----------------------------------------------------------------
@@ -304,6 +342,16 @@ module chip_core #(
 
         // CPU address upper byte
         out_drive[PAD_ADDR_HI0 +: 8] = cpu_addr_dbg[15:8];
+
+        // QSPI PSRAM: CS# and SCK are always outputs
+        out_drive[PAD_PSRAM_CSN] = psram_cs_n;
+        out_drive[PAD_PSRAM_SCK] = psram_sck;
+        // SIO[3:0]: bidirectional, per-lane output enable from the controller
+        for (pi = 0; pi < 4; pi = pi + 1) begin
+            ie_mask[PAD_PSRAM_SIO0 + pi]   = 1'b1;
+            oe_mask[PAD_PSRAM_SIO0 + pi]   = psram_sio_oe[pi];
+            out_drive[PAD_PSRAM_SIO0 + pi] = psram_sio_o[pi];
+        end
     end
 
     assign bidir_oe  = oe_mask;
@@ -317,7 +365,7 @@ module chip_core #(
     wire _unused;
     assign _unused = &{1'b0, input_in, analog,
                        rom_cs_kernal, rom_cs_basic, rom_cs_chargen,
-                       cia_pa_oe_w, cia_pb_oe_w};
+                       cia_pa_oe_w, cia_pb_oe_w, psram_ready};
 
 endmodule
 
