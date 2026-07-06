@@ -34,6 +34,15 @@ entity c64_system is
         ramCE       : out std_logic;
         ramWE       : out std_logic;
 
+        -- Early PSRAM trigger (bulk-RAM path). Fires one clean pulse at the
+        -- start of the period, using the CPU address/write flag (both stable
+        -- from state 0 since the CPU only advances on enableCpu at state 31),
+        -- so a ~500 ns quad read closes before the CPU samples at state 31.
+        -- Gated by the CPU-path RAM decode. ZP/stack keeps the late ramCE.
+        psramCE     : out std_logic;
+        psramAddr   : out unsigned(15 downto 0);
+        psramWE     : out std_logic;
+
         -- External ROM data
         kernalData  : in  unsigned(7 downto 0);
         basicData   : in  unsigned(7 downto 0);
@@ -108,6 +117,7 @@ architecture rtl of c64_system is
     signal cs_color_int : std_logic;
     signal cs_cia1_int  : std_logic;
     signal cs_ram_int   : std_logic;
+    signal cpu_cs_ram_int : std_logic;
     signal cs_kernal_int: std_logic;
     signal cs_basic_int : std_logic;
     signal cs_chargen_int: std_logic;
@@ -311,6 +321,7 @@ begin
         cs_color    => cs_color_int,
         cs_cia1     => cs_cia1_int,
         cs_ram      => cs_ram_int,
+        cpu_cs_ram  => cpu_cs_ram_int,
         cs_kernal   => cs_kernal_int,
         cs_basic    => cs_basic_int,
         cs_chargen  => cs_chargen_int
@@ -431,6 +442,14 @@ begin
     ramAddr <= systemAddr;
     ramWE   <= systemWe when sysCycle >= CYCLE_CPU0 else '0';
     ramCE   <= cs_ram_int when sysCycle = CYCLE_VIC0 or cpu_cyc = '1' else '0';
+
+    -- Early PSRAM trigger: one clean pulse at the start of the period (state 0)
+    -- for CPU RAM accesses, giving the quad read the full ~870 ns budget to the
+    -- state-31 CPU sample. cpuAddr/cpuWe/cpuDo are stable from state 0 (the CPU
+    -- is paused between enableCpu pulses), so read and write both trigger here.
+    psramCE   <= cpu_cs_ram_int when sysCycle = CYCLE_EXT0 else '0';
+    psramAddr <= cpuAddr;
+    psramWE   <= cpuWe;
 
     romAddr    <= systemAddr;
     cs_kernal  <= cs_kernal_int;

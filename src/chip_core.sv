@@ -89,6 +89,12 @@ module chip_core #(
     wire [7:0]  zp_rdata;      // on-die ZP/stack SRAM read data
     wire [7:0]  psram_rdata;   // external QSPI PSRAM read data
     wire        psram_ready;   // controller done strobe (unconsumed for now)
+    // Early PSRAM trigger from c64_system (CPU address + write flag, valid at
+    // period start; see the sequencer early-trigger in c64_system.vhd).
+    wire [15:0] psram_addr;
+    wire        psram_ce;
+    wire        psram_we;
+    wire        psram_is_lowpage;
     wire        psram_cs_n;
     wire        psram_sck;
     wire [3:0]  psram_sio_o;
@@ -155,6 +161,10 @@ module chip_core #(
         .ramDout     (ram_dout),
         .ramCE       (ram_ce),
         .ramWE       (ram_we),
+
+        .psramCE     (psram_ce),
+        .psramAddr   (psram_addr),
+        .psramWE     (psram_we),
 
         .kernalData  (kernal_data),
         .basicData   (basic_data),
@@ -235,9 +245,15 @@ module chip_core #(
     // controller is only triggered for non-low-page accesses (keeping that
     // traffic off the QSPI bus is the point of the carve-out).
     // -----------------------------------------------------------------
+    // Read mux + ZP/stack decode use systemAddr (ram_addr), which equals
+    // cpuAddr during the CPU half — so is_lowpage is correct at the CPU sample.
     assign is_lowpage  = (ram_addr[15:9] == 7'b0);   // $0000-$01FF
     assign ram_din     = is_lowpage ? zp_rdata : psram_rdata;
     assign psram_sio_i = bidir_in[PAD_PSRAM_SIO0 +: 4];
+
+    // The PSRAM controller is triggered off the early strobe, whose address is
+    // cpuAddr — decode low-page from that so ZP/stack traffic stays off the bus.
+    assign psram_is_lowpage = (psram_addr[15:9] == 7'b0);
 
     zpstack_sram zpstack_u (
         .clk  (clk32),
@@ -251,10 +267,10 @@ module chip_core #(
     qspi_psram_ctrl psram_u (
         .clk     (clk),             // 64 MHz -> 32 MHz SCK (CLK_DIV=0)
         .rst_n   (rst_n),
-        .ramAddr (ram_addr),
+        .ramAddr (psram_addr),      // CPU address (early trigger)
         .ramDin  (ram_dout),        // CPU write data -> memory
-        .ramCE   (ram_ce & ~is_lowpage),
-        .ramWE   (ram_we),
+        .ramCE   (psram_ce & ~psram_is_lowpage),
+        .ramWE   (psram_we),
         .ramDout (psram_rdata),     // memory read data -> CPU
         .ready   (psram_ready),
         .cs_n    (psram_cs_n),

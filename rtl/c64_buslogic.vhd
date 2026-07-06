@@ -59,6 +59,10 @@ entity c64_buslogic is
         cs_color    : out std_logic;
         cs_cia1     : out std_logic;
         cs_ram      : out std_logic;
+        -- CPU-path RAM decode, valid regardless of who holds the bus (unlike
+        -- cs_ram, which is muxed to the VIC during phi1). Used by c64_system
+        -- to gate the early PSRAM trigger at the start of the period.
+        cpu_cs_ram  : out std_logic;
         cs_kernal   : out std_logic;
         cs_basic    : out std_logic;
         cs_chargen  : out std_logic
@@ -76,6 +80,39 @@ architecture rtl of c64_buslogic is
     signal vicCharLoc     : std_logic;
 
     signal currentAddr    : unsigned(15 downto 0);
+
+    -- Single source of truth for "does this CPU access target main RAM?"
+    -- (RAM vs ROM/I/O), from the address, write flag and bank-switch bits.
+    -- Used both by the muxed decode below (the cpuHasBus branch drives
+    -- cs_ramLoc from it) and by the ungated cpu_cs_ram output that gates the
+    -- early PSRAM trigger — so the two can never drift. Encodes the C64 PLA
+    -- RAM regions.
+    function cpu_ram_sel(addr : unsigned(15 downto 0);
+                         we   : std_logic;
+                         bank : unsigned(2 downto 0)) return std_logic is
+    begin
+        case addr(15 downto 12) is
+        when X"E" | X"F" =>              -- RAM unless a KERNAL read
+            if not (we = '0' and bank(1) = '1') then
+                return '1';
+            end if;
+        when X"D" =>
+            if bank(1) = '0' and bank(0) = '0' then
+                return '1';              -- RAM banked in over $Dxxx
+            elsif bank(2) = '1' then
+                return '0';              -- I/O space (VIC/SID/color/CIA)
+            elsif we = '1' then
+                return '1';              -- RAM on write, chargen on read
+            end if;
+        when X"A" | X"B" =>              -- RAM unless a BASIC read
+            if not (we = '0' and bank(1) = '1' and bank(0) = '1') then
+                return '1';
+            end if;
+        when others =>
+            return '1';                  -- $0000-$9FFF, $C000-$CFFF: RAM
+        end case;
+        return '0';
+    end function;
 begin
 
     -- Data-to-CPU mux
@@ -121,16 +158,17 @@ begin
 
         if cpuHasBus = '1' then
             currentAddr <= cpuAddr;
+            -- RAM select from the shared decode; the case below only picks the
+            -- non-RAM selects (ROM / I/O / chargen).
+            cs_ramLoc <= cpu_ram_sel(cpuAddr, cpuWe, bankSwitch);
             case cpuAddr(15 downto 12) is
             when X"E" | X"F" =>
                 if cpuWe = '0' and bankSwitch(1) = '1' then
                     cs_kernalLoc <= '1';
-                else
-                    cs_ramLoc <= '1';
                 end if;
             when X"D" =>
                 if bankSwitch(1) = '0' and bankSwitch(0) = '0' then
-                    cs_ramLoc <= '1';
+                    null; -- RAM (cs_ramLoc set above)
                 elsif bankSwitch(2) = '1' then
                     case cpuAddr(11 downto 8) is
                         when X"0" | X"1" | X"2" | X"3" =>
@@ -149,20 +187,14 @@ begin
                 else
                     if cpuWe = '0' then
                         cs_CharLoc <= '1';
-                    else
-                        cs_ramLoc <= '1';
                     end if;
                 end if;
             when X"A" | X"B" =>
                 if cpuWe = '0' and bankSwitch(1) = '1' and bankSwitch(0) = '1' then
                     cs_basicLoc <= '1';
-                else
-                    cs_ramLoc <= '1';
                 end if;
-            when X"0" =>
-                cs_ramLoc <= '1';
             when others =>
-                cs_ramLoc <= '1';
+                null; -- RAM (cs_ramLoc set above)
             end case;
 
             systemWe <= cpuWe;
@@ -193,5 +225,12 @@ begin
 
     dataToVic  <= chargenData when vicCharLoc = '1' else ramData;
     systemAddr <= currentAddr;
+
+    -- CPU-path RAM decode, independent of cpuHasBus (unlike cs_ram, which is
+    -- muxed to the VIC during phi1). cpuAddr/cpuWe/bankSwitch are stable for
+    -- the whole period (the CPU only advances on enableCpu at state 31), so
+    -- this is valid from state 0 — when the early PSRAM trigger fires, before
+    -- the shared cs_ram has switched from the VIC to the CPU.
+    cpu_cs_ram <= cpu_ram_sel(cpuAddr, cpuWe, bankSwitch);
 
 end architecture;

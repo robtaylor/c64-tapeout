@@ -28,7 +28,9 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import Edge, RisingEdge, Timer
+
+from qspi_psram_model import QspiPsramModel, _CSDeasserted
 
 # --------------------------------------------------------------------- #
 #  Pad indices (must match src/chip_core.sv)
@@ -39,6 +41,90 @@ PAD_VIC_VSYNC = 6
 PAD_CIA_IRQ   = 23
 PAD_CPU_RW    = 24
 PAD_ADDR_HI0  = 25  # cpu_addr[15:8] occupies bidir[25:32]
+# QSPI PSRAM pads (must match src/chip_core.sv)
+PAD_PSRAM_CSN  = 33
+PAD_PSRAM_SCK  = 34
+PAD_PSRAM_SIO0 = 35  # sio[3:0] = bidir[35..38]
+
+QRD_DUMMY_CYCLES = 6  # must match the RTL's QRD_DUMMY parameter
+
+
+# --------------------------------------------------------------------- #
+#  QSPI PSRAM BFM wired onto the chip_core pad vectors
+# --------------------------------------------------------------------- #
+class _VecSlice:
+    """Present a bit-slice of a packed vector handle as an integer .value.
+
+    Writes read-modify-write the backing handle so neighbouring pad bits are
+    preserved (the BFM only ever drives the 4 SIO input lanes).
+    """
+
+    def __init__(self, handle, lsb: int, width: int) -> None:
+        self._h = handle
+        self._lsb = lsb
+        self._mask = (1 << width) - 1
+
+    @property
+    def value(self) -> int:
+        return (int(self._h.value) >> self._lsb) & self._mask
+
+    @value.setter
+    def value(self, v: int) -> None:
+        cur = int(self._h.value)
+        cur &= ~(self._mask << self._lsb)
+        cur |= (v & self._mask) << self._lsb
+        self._h.value = cur
+
+
+class ChipCoreBFM(QspiPsramModel):
+    """``QspiPsramModel`` attached to chip_core's muxed QSPI pads.
+
+    The controller's cs_n/sck/sio are bit-slices of the ``bidir_out`` vector,
+    and sio_i is driven back through ``bidir_in``. cocotb can't put an ``Edge``
+    on a bit-select of a Verilator vector port, so the trigger primitives are
+    overridden to wake on the whole ``bidir_out`` vector and re-check the bits.
+    """
+
+    def __init__(self, dut, **kw) -> None:
+        sio_i = _VecSlice(dut.bidir_in, PAD_PSRAM_SIO0, 4)
+        super().__init__(
+            cs_n=None, sck=None, sio_o=None, sio_oe=None, sio_i=sio_i, **kw
+        )
+        self._dut = dut
+
+    def _cs_high(self) -> bool:
+        return bool((int(self._dut.bidir_out.value) >> PAD_PSRAM_CSN) & 1)
+
+    def _sck_level(self) -> int:
+        return (int(self._dut.bidir_out.value) >> PAD_PSRAM_SCK) & 1
+
+    async def _edge(self, want_level: int) -> None:
+        while True:
+            await Edge(self._dut.bidir_out)
+            if self._cs_high():
+                raise _CSDeasserted
+            if self._sck_level() == want_level:
+                return
+
+    def _sample_lanes(self, lanes: int) -> int:
+        o = (int(self._dut.bidir_out.value) >> PAD_PSRAM_SIO0) & 0xF
+        return (o & 0x1) if lanes == 1 else (o & 0xF)
+
+    async def _wait_cs_high(self) -> None:
+        while not self._cs_high():
+            await Edge(self._dut.bidir_out)
+
+    async def run(self) -> None:
+        while True:
+            # Wait for a genuine CS# high -> low transition (transaction start).
+            await self._wait_cs_high()
+            while self._cs_high():
+                await Edge(self._dut.bidir_out)
+            try:
+                await self._transaction()
+            except _CSDeasserted:
+                pass
+            self.sio_i.value = 0
 
 
 # --------------------------------------------------------------------- #
@@ -76,14 +162,33 @@ async def test_boot_smoke(dut):
     # period_high to keep the frequency exactly 64 MHz (as in qspi_psram_tb).
     cocotb.start_soon(Clock(dut.clk, 15625, unit="ps", period_high=7813).start())
 
+    # Attach the QSPI PSRAM BFM to the pads before releasing reset so it catches
+    # the controller's 0x35 enter-QPI init transaction. PSRAM starts zeroed; the
+    # KERNAL RAM test writes then reads back, and the BFM stores/returns bytes so
+    # RAM outside the on-die ZP/stack behaves like real memory.
+    bfm = ChipCoreBFM(dut, read_dummy_cycles=QRD_DUMMY_CYCLES)
+    cocotb.start_soon(bfm.run())
+
     await reset(dut, hold_ns=500)
     await RisingEdge(dut.clk)
+
+    # Give the controller time to finish the 0x35 enter-QPI init before the CPU
+    # starts issuing RAM accesses.
+    for _ in range(2000):
+        if bfm.qpi:
+            break
+        await RisingEdge(dut.clk)
+    assert bfm.qpi, "QSPI controller did not enter QPI mode (0x35) after reset"
 
     hsync_toggles = 0
     last_hsync    = bidir_bit(dut, PAD_VIC_HSYNC)
     addr_hi_seen: set[int] = set()
 
-    CYCLES = 8000  # ~250 us at 32 MHz → ~8 full CPU cycles
+    # dut.clk is the 64 MHz pad clock (÷2 → 32 MHz core, ÷32 states → ~1 MHz
+    # CPU). 128000 pad clocks ≈ 2 ms ≈ ~2000 CPU cycles — far enough into the
+    # KERNAL reset to run the RAMTAS memory test, which reads *and* writes
+    # external RAM through the PSRAM BFM.
+    CYCLES = 128000
     for _ in range(CYCLES):
         await RisingEdge(dut.clk)
 
@@ -113,9 +218,15 @@ async def test_boot_smoke(dut):
         f"seen: {sorted(addr_hi_seen)}"
     )
 
+    # The BFM should have serviced real PSRAM traffic (RAM outside ZP/stack).
+    assert bfm.reads or bfm.writes, (
+        "BFM saw no PSRAM transactions — CPU never touched external RAM"
+    )
+
     dut._log.info(
         f"smoke OK — hsync toggles={hsync_toggles}, "
-        f"distinct addr_hi={distinct}, samples={sorted(addr_hi_seen)[:8]}…"
+        f"distinct addr_hi={distinct}, samples={sorted(addr_hi_seen)[:8]}…, "
+        f"psram reads={len(bfm.reads)}, writes={len(bfm.writes)}"
     )
 
 
@@ -143,10 +254,20 @@ def chip_core_runner() -> None:
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # chip_top.sv pulls the GF180 padframe — skip it for chip_core sim.
+    # sram_wrapper.sv is no longer instantiated (replaced by the QSPI PSRAM +
+    # ZP/stack split), so skip it too.
     rtl = [p for p in parse_filelist(project_root / "rtl.f")
-           if not p.endswith("chip_top.sv")]
+           if not (p.endswith("chip_top.sv") or p.endswith("sram_wrapper.sv"))]
+    pulp = project_root / "ip" / "pulp"
     sources = [
         str(project_root / "build" / "c64_system_synth.v"),
+        # PULP serial engine + QSPI PSRAM controller + on-die ZP/stack SRAM
+        str(pulp / "spi_master_clkgen.sv"),
+        str(pulp / "spi_master_tx.sv"),
+        str(pulp / "spi_master_rx.sv"),
+        str(pulp / "spi_master_controller.sv"),
+        str(project_root / "rtl" / "qspi_psram_ctrl.sv"),
+        str(project_root / "src" / "zpstack_sram.sv"),
         *rtl,
     ]
 
