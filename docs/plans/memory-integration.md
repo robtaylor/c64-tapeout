@@ -85,11 +85,11 @@ Open items to verify during implementation, not blockers: the 6510 processor por
 ## Tasks (in dependency order)
 
 1. **Clock — DONE 2026-07-06.** `chip_core.sv` divides the 64 MHz pad `clk` by two (`reg clk32_div`) into `clk32`, which now clocks `c64_system`, `mos6526`, the TOD and heartbeat counters; the raw 64 MHz `clk` is reserved for `qspi_psram_ctrl` (wired in task 2). `chip_core_tb.py` drives `clk` at 64 MHz (period_high split for the odd 15625 ps). `config.yaml` `CLOCK_PERIOD` → 15.625 and `chip_top.sdc` gains a `create_generated_clock` for `clk32` (/2) — without it the core, now on the divided clock, would be unconstrained in STA. Verified: `make synth-test` clean (only the known tri-state warning), `make sim-smoke` boots (reset-vector + I/O addresses, hsync toggling). **WS-P2-3 must confirm the SDC `clk32` divider pin path on the first PnR run** (the guard WARNs if `*clk32_div*/Q` doesn't match post-flatten).
-2. **`chip_core.sv` memory split.** Instantiate `qspi_psram_ctrl` (main-RAM path, `~is_lowpage` CE gate) and 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1` for ZP+stack (`is_lowpage` CE). Add the `is_lowpage` decode and the `ram_din` mux. Remove the `sram_wrapper` instance.
-3. **Pads.** Add `psram_cs_n`/`psram_sck` (always output) at bidir[33..34] and `psram_sio[3:0]` (bidir, `out_drive ⇐ sio_o`, `oe ⇐ sio_oe`, `ie=1`, `sio_i ⇐ bidir_in`) at bidir[35..38], per [ADR 0004 §2](../adr/0004-external-qspi-psram.md). Update the `oe_mask`/`ie_mask`/`out_drive` block (`chip_core.sv:252-290`).
-4. **Sequencer early-trigger.** In `c64_system.vhd`, assert `ramCE` for PSRAM-region accesses at the start of the access window (one clean rising edge per access) instead of the late `CYCLE_VIC0`/`cpu_cyc` timing, so the quad read closes before the sample edge. Leave the ZP/stack path 1-cycle.
-5. **VIC c-access line-buffer (~40 B flops).** Prefetch the badline sequential c-access burst so it is not serialised against the g-access. Second increment; land after 1–4 pass a functional sim.
-6. **Cleanup.** Stub or delete `src/sram_wrapper.sv`; update `vhdl.f`/`rtl.f`; drop the `USE_SRAM_MACROS` wrapper path.
+2. **`chip_core.sv` memory split — DONE 2026-07-06.** `qspi_psram_ctrl` (main-RAM path, `~psram_is_lowpage` CE gate) + `zpstack_sram` (2× `sram256x8` for ZP+stack, `is_lowpage` CE) instantiated; `is_lowpage` decode + `ram_din` mux added; `sram_wrapper` instance removed.
+3. **Pads — DONE 2026-07-06.** `psram_cs_n`/`psram_sck` (always output) at bidir[33..34] and `psram_sio[3:0]` (bidir) at bidir[35..38], per [ADR 0004 §2](../adr/0004-external-qspi-psram.md); `oe_mask`/`ie_mask`/`out_drive` updated with per-lane `sio_oe`.
+4. **Sequencer early-trigger — DONE 2026-07-06 (commit 9284d4f).** Rather than retiming the shared `ramCE` (bounded to ~440 ns because `systemAddr` only carries `cpuAddr` from state 16), `c64_system.vhd` adds a **dedicated** `psramCE`/`psramAddr`/`psramWE` strobe firing at `CYCLE_EXT0` (state 0). `cpuAddr`/`cpuWe`/`cpuDo` are stable from state 0 (the CPU is paused between `enableCpu` pulses at state 31), so reads *and* writes trigger there with the full ~870 ns budget to the state-31 sample — well inside a ~500 ns quad read. The late `ramCE` stays for the 1-cycle ZP/stack path. The region gate `cpu_cs_ram` (valid regardless of `cpuHasBus`) is factored into `c64_buslogic.cpu_ram_sel()`, shared with the muxed `cs_ramLoc` so the two decodes can't drift. Verified: `sim-smoke` boots from the PSRAM BFM (hsync=62, psram reads=177/writes=175 through RAMTAS); `synth-test` clean; `sim-qspi` 3/3.
+5. **VIC c-access line-buffer (~40 B flops) — TODO (next).** Prefetch the badline sequential c-access burst so it is not serialised against the g-access. VIC PSRAM reads are currently *not* issued (only the CPU access triggers `psramCE`), so non-badline boot works but VIC RAM fetches return stale controller data. The dedicated `psramCE` strobe is the arbitration seam this plugs into. Land after the functional single-access integration (now proven).
+6. **Cleanup — TODO, entangled with WS-P2-3.** Delete `src/sram_wrapper.sv` and drop the `USE_SRAM_MACROS` path — but `librelane/config.yaml` still lists `sram_wrapper.sv` + the 8× OCD-macro PDN/placement, so this must land with the WS-P2-3 PnR-config update (new sources: pulp/qspi/zpstack; 2× `sram256x8` macros; psram pad constraints). `rtl.f` still lists `sram_wrapper.sv`; the cocotb runner filters it explicitly. `CLAUDE.md` memory lines updated 2026-07-06.
 
 ## Deliverables
 
@@ -100,9 +100,11 @@ Open items to verify during implementation, not blockers: the 6510 processor por
 
 ## Exit criteria
 
-- `make synth-test` passes (clean; the 2 SRAM macros as black boxes)
-- `make sim-smoke` boots and fetches the KERNAL reset vector from the PSRAM BFM (not internal SRAM), ZP/stack served on-die
-- Reset-vector fetch visible on the bidir pads as before
+- ✅ `make synth-test` passes (clean; the 2 SRAM macros as black boxes)
+- ✅ `make sim-smoke` boots through the KERNAL RAMTAS memory test, reading *and* writing bulk RAM via the PSRAM BFM (reads=177/writes=175), ZP/stack served on-die
+- ✅ QSPI traffic (CS#/SCK/SIO) visible on bidir[33..38]
+
+**Milestone met 2026-07-06 (commit 9284d4f).** Tasks 5 (VIC line-buffer) and 6 (cleanup, with WS-P2-3) remain.
 
 ## Links
 
