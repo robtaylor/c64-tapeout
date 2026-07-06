@@ -1,0 +1,85 @@
+---
+session: c64-pnr-rom-flash
+date: 2026-07-06
+status: partial
+outcome: PARTIAL_PLUS
+---
+
+goal: >
+  Closed WS-P2-2 (memory integration; sim-smoke boots from PSRAM). Landed WS-P2-3
+  structurally: PnR now clears the phase-1 wall (5V-SRAM macro power + clk32 clock
+  + placement + CTS + STA all pass). Root-caused the remaining GlobalRouting
+  non-convergence to the 20 KB of LUT-synthesized ROMs, and decided the fix
+  (ADR 0005: ROMs -> external QSPI flash on the shared bus). All pushed to
+  origin/main (HEAD 3c03486).
+
+now: >
+  Implement WS-P2-10 (external flash ROM path) per docs/plans/rom-flash-integration.md.
+  Start with task 1: add a flash chip-select + read-only fast-read + a two-device
+  arbiter to rtl/qspi_psram_ctrl.sv (or a sibling), with a standalone cocotb
+  read-only flash BFM (mirror cocotb/qspi_psram_model.py). Then the ROM prefetch
+  buffer (task 2), chip_core wiring + delete the rom_*.sv (task 3), buslogic ROM
+  data routing (task 4), boot gating (task 5), cleanup (task 6), re-PnR (task 7 —
+  GlobalRouting should converge once the LUT ROMs are gone).
+
+test: >
+  nix develop -c make sim-smoke  (WS-P2-2, PASSES: psram reads=177/writes=175, hsync=62).
+  nix develop -c make synth-test (clean, only known tri-state warning).
+  nix develop -c make sim-qspi   (3/3, standalone controller).
+  nix develop -c make librelane-pdn  (currently reaches Stage 37 GlobalRouting then
+  congestion-stalls; will route once ROMs move off-die).
+
+done_this_session:
+  - task: "WS-P2-2 task 4 DONE+pushed (9284d4f): c64_system.vhd dedicated early PSRAM trigger (psramCE/psramAddr/psramWE at CYCLE_EXT0, cpuAddr/cpuWe/cpuDo stable from state 0). c64_buslogic cpu_ram_sel() shared decode (no drift). chip_core wired to early strobe. BFM (ChipCoreBFM subclass) attached to bidir pads in chip_core_tb.py. sim-smoke boots from PSRAM. /simplify applied."
+    files: [rtl/c64_system.vhd, rtl/c64_buslogic.vhd, src/chip_core.sv, cocotb/chip_core_tb.py, CLAUDE.md]
+  - task: "WS-P2-2 milestone folded into plan; handoff deleted (four-doc discipline)."
+    files: [docs/plans/memory-integration.md]
+  - task: "WS-P2-3 config DONE+pushed (bc0ccc5): 2x 5V gf180mcu_fd_ip_sram__sram256x8m8wm1 macros (from PDK lib/, genuine 5V corners); crib-aligned Metal4/Metal5 PDN stack; PL_ROUTABILITY_DRIVEN false + density 30 + cell padding; clk32 generated clock fixed. PnR converges through CTS/STA."
+    files: [librelane/config.yaml, librelane/pdn_cfg.tcl, librelane/chip_top.sdc]
+  - task: "ADR 0005 + plan DONE+pushed (3c03486): ROMs -> external QSPI flash. ADR 0003 ROM decision superseded; ADR 0004/README cross-refs; rom-flash-integration.md plan; roadmap WS-P2-3 status."
+    files: [docs/adr/0005-external-flash-roms.md, docs/adr/0003-memory-architecture.md, docs/adr/0004-external-qspi-psram.md, docs/adr/README.md, docs/plans/rom-flash-integration.md, docs/plans/tapeout-roadmap.md]
+
+blockers:
+  - "librelane-pdn cannot complete routing until the LUT ROMs are removed (WS-P2-10). Structural PnR (placement/CTS/STA) is fine."
+
+questions:
+  - "Flash read command: 0x0B single-lane fast-read vs 0xEB quad (match the PSRAM QPI path)? Decide in WS-P2-10 task 1."
+  - "ROM prefetch buffer size / line width — co-design with the deferred VIC c-access line-buffer (WS-P2-2 task 5)."
+  - "Worst-case concurrency (VIC CHARGEN + CPU instr fetch + CPU RAM in one cycle on the shared bus) — re-measure slack in integrated sim; may need a stall safety-net (deferred decision ii)."
+
+decisions:
+  - roms_to_external_flash: "20 KB KERNAL/BASIC/CHARGEN as LUT case(addr) mux trees = the routing congestion source. GF180 has no ROM IP; SRAM-as-ROM = ~40 macros + boot load. Move to external QSPI NOR flash on the SHARED bus, +1 CS on bidir[39] (last spare pad; budget now fully spent). Read-only, prefetch buffer. ADR 0005."
+  - pdn_5v_sram_stack: "Use the crib (test-tapeout-1 / riscboy-180) silicon-proven 5V-SRAM PDN: gf180 default PDN layers Metal4(V)/Metal5(H) + core ring Metal4/Metal3. The prior Metal2/Metal3 override collided with the macro's own Metal2/Metal3 power pins -> straps unreachable -> PSM-0039 -> RePlAce NaN (the phase-1 symptom)."
+  - routability_off: "PL_ROUTABILITY_DRIVEN false so GlobalPlacement's cell-inflation loop (diverged on the LUT-ROM density) is skipped; GlobalRouting absorbs congestion (GRT_ALLOW_CONGESTION)."
+
+findings:
+  - phase1_wall_was_pdn_not_voltage: "Phase-1 diverged because the 3.3V OCD macro floated its rails. With the 5V fd_ip_sram macro AND the correct Metal4/Metal5 PDN layer stack, macro power connects (PSM-0039 gone) and placement converges. The macro power pins are Metal2(ring)+Metal3(fingers); the Metal4 SRAM straps reach them via the Metal4<->Metal3 core-ring connect."
+  - clk32_net_name: "Synthesis renames the clk32 divider flop generically (e.g. _70125_), but the NET it drives keeps the stable RTL name i_chip_core.c64_u.buslogic.clk (6k-fanout core clock). SDC now finds the driver pin via that net (get_pins -of_objects), and sources the generated clock from the master's own object ($port_args) so STA traces it (fixes STA-1060). chip_top.sdc:28-44."
+  - lut_rom_congestion: "GlobalRouting ran 3+ hrs CPU (98%) without converging, congestion ~1.25, driven by the ROM mux fabric. rom_kernal/basic/chargen.sv are auto-gen case(addr). Only on-die memory should be color RAM (1024x4 flops) + ZP/stack (2x sram256x8); everything else external QSPI."
+  - pdk_lib_subdir: "The project-local PDK (gf180mcu/, cloned via make clone-pdk, PDK_TAG 1.8.0) uses lib/ for liberty files, NOT liberty/ (the ~/.volare copy uses liberty/). MACROS lib paths must use lib/."
+  - jacquard_flash_cosim: "Jacquard already models a QSPI flash peripheral (the qspi_ram was built by extending flash). External-flash ROMs are directly cosim-able in WS-P2-6. See [[jacquard-cosim-psram-qspi]] memory + thoughts/shared/handoffs/jacquard-qspi-cosim/."
+
+worked:
+  - "Reading the crib (test-tapeout-1 librelane/pdn/pdn_5v_sram.tcl + config) to find the silicon-proven 5V-SRAM PDN layer stack, instead of hand-tuning vias blind."
+  - "Incremental PnR: each fix moved the failure to a later stage (config-load -> PDN-0186 -> PSM-0039 -> GPL-0305 routability -> STA-1060 -> routing), which localized each root cause."
+  - "nohup + disown for the >10min PnR run (the harness kills background Bash at the 600000ms timeout); Monitor tool (timeout up to 3600000ms) to watch for completion."
+
+failed:
+  - "Trusting the background-task exit code: a trailing `echo EXIT=$?` reports the echo's 0, not make's exit. Redirect make directly and read the log."
+  - "Patching the PDN piecemeal on the c64's Metal2/Metal3 override — it fundamentally collided with the macro pins. Had to adopt the crib's whole Metal4/Metal5 stack."
+
+next:
+  - "WS-P2-10 task 1: flash read path + arbiter in qspi_psram_ctrl.sv + read-only flash BFM. See docs/plans/rom-flash-integration.md."
+  - "WS-P2-10 tasks 2-6: ROM prefetch buffer; chip_core wiring + CS_flash at bidir[39]; delete rom_*.sv; buslogic ROM data routing; boot gating; cleanup (rtl.f, config.yaml VERILOG_FILES, Makefile, CLAUDE.md)."
+  - "WS-P2-10 task 7: re-run make librelane-pdn -> GlobalRouting should converge (ROMs gone). Then trace to signoff (also revisit timing: post-CTS repair reported 7130 slew / 4494 cap / 4574 setup violations — quality iteration)."
+  - "WS-P2-6: Jacquard PSRAM+flash cosim needs the completed post-PnR netlist (final/pnl/chip_top.pnl.v) — only available after task 7 routes. User was rolling a Jacquard release."
+
+files:
+  created:
+    - docs/adr/0005-external-flash-roms.md
+    - docs/plans/rom-flash-integration.md
+    - "thoughts/shared/handoffs/c64-pnr-rom-flash/2026-07-06_22-57_ws-p2-3-pnr-and-flash-rom-pivot.yaml"
+  modified:
+    - "rtl/c64_system.vhd, rtl/c64_buslogic.vhd, src/chip_core.sv, cocotb/chip_core_tb.py (WS-P2-2, pushed)"
+    - "librelane/config.yaml, librelane/pdn_cfg.tcl, librelane/chip_top.sdc (WS-P2-3, pushed)"
+    - "docs/adr/0003, docs/adr/0004, docs/adr/README.md, docs/plans/memory-integration.md, docs/plans/tapeout-roadmap.md, CLAUDE.md (pushed)"
