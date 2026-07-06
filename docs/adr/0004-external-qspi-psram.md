@@ -1,6 +1,6 @@
 # ADR 0004 — External QSPI PSRAM, supersedes on-die SRAM macros (ADR 0003)
 
-**Status:** Accepted (2026-06-30); amended 2026-07-05 — **hybrid memory**: the bulk 64 KB stays external QSPI PSRAM, but a 512 B on-die 5V SRAM array (zero page + stack) is carved back in (Decision §9). The original all-external wording is retained under [Superseded decisions](#superseded-decisions). Supersedes the main-RAM portion of [ADR 0003](0003-memory-architecture.md). ROM strategy in ADR 0003 remains in force.
+**Status:** Accepted (2026-06-30); amended 2026-07-05 — **hybrid memory**: the bulk 64 KB stays external QSPI PSRAM, but a 512 B on-die 5V SRAM array (zero page + stack) is carved back in (Decision §9). The original all-external wording is retained under [Superseded decisions](#superseded-decisions). Supersedes the main-RAM portion of [ADR 0003](0003-memory-architecture.md). The ROM strategy has since also moved off-die — see [ADR 0005](0005-external-flash-roms.md) (external QSPI flash sharing this bus).
 
 **TL;DR.** In the context of taping out a C64 subset on GF180MCU 9T 5V (`gf180mcu_fd_sc_mcu9t5v0`), facing a voltage mismatch between the 3.3V `gf180mcu_ocd_ip_sram` macros and the 5V cell library, and limited foundry alternatives (only 64x8–512x8 5V SRAM macros in `gf180mcu_fd_ip_sram`, capping at 4KB across 8 macros), we chose to move main RAM **off-die** to an external QSPI PSRAM accessed through 6 of our spare bidir pads, accepting the controller logic and board complexity in exchange for full 64 KB (the original C64 memory map) and a clean tapeout.
 

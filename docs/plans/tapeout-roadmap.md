@@ -61,6 +61,8 @@ Settled params: **controller clock 64 MHz** (2× the 32 MHz SCK; `f_sck = f_clk/
 
 ### WS-P2-3 — LibreLane config cleanup
 
+**Status (2026-07-06, commit bc0ccc5): structurally DONE, routing blocked on ROM congestion.** The config swap (2× 5V `sram256x8`, sources, PDN topology) and the `clk32` generated clock are landed. PnR now clears the phase-1 wall: **GlobalPlacement converges, CTS + mid-PnR STA pass** (the 5V-macro PDN connects — no PSM-0039). But **GlobalRouting cannot converge** — congestion ~1.25 driven almost entirely by the 20 KB LUT-synthesized ROMs (`case(addr)` mux trees). That is an architectural problem, not a config one: resolved by **[WS-P2-10 / ADR 0005](rom-flash-integration.md)** (ROMs → external QSPI flash). Re-run PnR to signoff once the ROMs are off-die. Task-list below is largely complete; the tricky-fact notes (corner aliasing, clk32 pin path) are retained as guardrails.
+
 **Goal:** Remove the *3.3V OCD bulk-SRAM* machinery from the LibreLane config, and register the *2× 5V `sram256x8`* ZP/stack macros ([ADR 0004 §9](../adr/0004-external-qspi-psram.md#decision)) cleanly. The floorplan goes from "8 big 3.3V macros" to "2 small 5V macros" — near-cells-only, and PDN-coherent because the returning macros are 5V-native.
 
 **Tasks:**
