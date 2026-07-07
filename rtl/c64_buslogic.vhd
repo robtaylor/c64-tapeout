@@ -33,9 +33,10 @@ entity c64_buslogic is
         aec         : in std_logic;
 
         ramData     : in unsigned(7 downto 0);
-        chargenData : in unsigned(7 downto 0);
-        kernalData  : in unsigned(7 downto 0);
-        basicData   : in unsigned(7 downto 0);
+        -- Single flash ROM read-data port (ADR 0005). The external QSPI flash
+        -- returns one byte for whichever of KERNAL/BASIC/CHARGEN is selected;
+        -- the three separate on-die ROM data buses are gone.
+        romData     : in unsigned(7 downto 0);
 
         bankSwitch  : in unsigned(2 downto 0);
 
@@ -63,6 +64,13 @@ entity c64_buslogic is
         -- cs_ram, which is muxed to the VIC during phi1). Used by c64_system
         -- to gate the early PSRAM trigger at the start of the period.
         cpu_cs_ram  : out std_logic;
+        -- CPU-path ROM decode, ungated by cpuHasBus (companion to cpu_cs_ram),
+        -- used by c64_system to fire the early flash-ROM trigger at the start of
+        -- the period and to form the 24-bit flash offset. cpu_rom_sel encodes
+        -- which ROM: "00" none, "01" KERNAL, "10" BASIC, "11" CHARGEN — a non-zero
+        -- value is the "any ROM read" condition (c64_system derives its trigger
+        -- from cpu_rom_sel /= "00", so no separate cpu_cs_rom port is needed).
+        cpu_rom_sel : out unsigned(1 downto 0);
         cs_kernal   : out std_logic;
         cs_basic    : out std_logic;
         cs_chargen  : out std_logic
@@ -113,22 +121,54 @@ architecture rtl of c64_buslogic is
         end case;
         return '0';
     end function;
+
+    -- Companion to cpu_ram_sel: which ROM region (if any) a CPU read hits, from
+    -- the address, write flag and bank-switch bits. Mutually exclusive with
+    -- cpu_ram_sel — an address is either RAM or a ROM read, never both. Encodes
+    -- "00" none / "01" KERNAL / "10" BASIC / "11" CHARGEN. Ungated by cpuHasBus,
+    -- so it is valid from state 0 for the early flash-ROM trigger in c64_system,
+    -- and is used both to fire that trigger and to form the 24-bit flash offset.
+    function cpu_rom_region(addr : unsigned(15 downto 0);
+                            we   : std_logic;
+                            bank : unsigned(2 downto 0)) return unsigned is
+    begin
+        if we = '0' then
+            case addr(15 downto 12) is
+            when X"E" | X"F" =>          -- KERNAL read ($E000-$FFFF)
+                if bank(1) = '1' then
+                    return "01";
+                end if;
+            when X"A" | X"B" =>          -- BASIC read ($A000-$BFFF)
+                if bank(1) = '1' and bank(0) = '1' then
+                    return "10";
+                end if;
+            when X"D" =>                 -- CHARGEN read ($D000-$DFFF)
+                if not (bank(1) = '0' and bank(0) = '0') and bank(2) = '0' then
+                    return "11";
+                end if;
+            when others =>
+                null;
+            end case;
+        end if;
+        return "00";
+    end function;
+
+    signal cpu_rom_region_i : unsigned(1 downto 0);
 begin
 
     -- Data-to-CPU mux
     process(ramData, vicData, colorData, cia1Data,
-            chargenData, kernalData, basicData,
+            romData,
             cs_kernalLoc, cs_basicLoc, cs_CharLoc,
             cs_ramLoc, cs_vicLoc, cs_colorLoc,
             cs_cia1Loc, lastVicData)
     begin
         dataToCpu <= lastVicData;
-        if cs_CharLoc = '1' then
-            dataToCpu <= chargenData;
-        elsif cs_kernalLoc = '1' then
-            dataToCpu <= kernalData;
-        elsif cs_basicLoc = '1' then
-            dataToCpu <= basicData;
+        -- All three ROM regions (CHARGEN/KERNAL/BASIC) now read back through the
+        -- single external-flash romData byte (ADR 0005); the cs_*Loc decode still
+        -- selects which region is active, the byte source is shared.
+        if cs_CharLoc = '1' or cs_kernalLoc = '1' or cs_basicLoc = '1' then
+            dataToCpu <= romData;
         elsif cs_ramLoc = '1' then
             dataToCpu <= ramData;
         elsif cs_vicLoc = '1' then
@@ -158,45 +198,26 @@ begin
 
         if cpuHasBus = '1' then
             currentAddr <= cpuAddr;
-            -- RAM select from the shared decode; the case below only picks the
-            -- non-RAM selects (ROM / I/O / chargen).
             cs_ramLoc <= cpu_ram_sel(cpuAddr, cpuWe, bankSwitch);
-            case cpuAddr(15 downto 12) is
-            when X"E" | X"F" =>
-                if cpuWe = '0' and bankSwitch(1) = '1' then
-                    cs_kernalLoc <= '1';
-                end if;
-            when X"D" =>
-                if bankSwitch(1) = '0' and bankSwitch(0) = '0' then
-                    null; -- RAM (cs_ramLoc set above)
-                elsif bankSwitch(2) = '1' then
-                    case cpuAddr(11 downto 8) is
-                        when X"0" | X"1" | X"2" | X"3" =>
-                            cs_vicLoc <= '1';
-                        when X"4" | X"5" | X"6" | X"7" =>
-                            null; -- SID space: no SID, returns open bus
-                        when X"8" | X"9" | X"A" | X"B" =>
-                            cs_colorLoc <= '1';
-                        when X"C" =>
-                            cs_cia1Loc <= '1';
-                        when X"D" =>
-                            null; -- CIA2 space: no CIA2
-                        when others =>
-                            null; -- $DE00/$DF00: no I/O expansion
-                    end case;
-                else
-                    if cpuWe = '0' then
-                        cs_CharLoc <= '1';
-                    end if;
-                end if;
-            when X"A" | X"B" =>
-                if cpuWe = '0' and bankSwitch(1) = '1' and bankSwitch(0) = '1' then
-                    cs_basicLoc <= '1';
-                end if;
-            when others =>
-                null; -- RAM (cs_ramLoc set above)
+            -- ROM region selects from the single shared decode (cannot drift from
+            -- cpu_rom_region / the flash offset map in c64_system).
+            case cpu_rom_region(cpuAddr, cpuWe, bankSwitch) is
+                when "01"   => cs_kernalLoc <= '1';
+                when "10"   => cs_basicLoc  <= '1';
+                when "11"   => cs_CharLoc   <= '1';
+                when others => null;
             end case;
-
+            -- I/O space ($Dxxx with bank2='1', RAM/CHARGEN excluded) — NOT a ROM/RAM
+            -- region, so it stays a dedicated sub-decode.
+            if cpuAddr(15 downto 12) = X"D" and bankSwitch(2) = '1'
+               and not (bankSwitch(1) = '0' and bankSwitch(0) = '0') then
+                case cpuAddr(11 downto 8) is
+                    when X"0" | X"1" | X"2" | X"3" => cs_vicLoc   <= '1';
+                    when X"8" | X"9" | X"A" | X"B" => cs_colorLoc <= '1';
+                    when X"C"                       => cs_cia1Loc  <= '1';
+                    when others                     => null;  -- SID/CIA2/$DE-DF: open bus
+                end case;
+            end if;
             systemWe <= cpuWe;
         else
             -- VIC has the bus
@@ -223,7 +244,9 @@ begin
     cs_basic   <= cs_basicLoc;
     cs_chargen <= cs_CharLoc or vicCharLoc;
 
-    dataToVic  <= chargenData when vicCharLoc = '1' else ramData;
+    -- VIC CHARGEN fetch ($1000-$1FFF in bank 0) also reads through the external
+    -- flash romData byte; any other VIC access reads main RAM.
+    dataToVic  <= romData when vicCharLoc = '1' else ramData;
     systemAddr <= currentAddr;
 
     -- CPU-path RAM decode, independent of cpuHasBus (unlike cs_ram, which is
@@ -232,5 +255,12 @@ begin
     -- this is valid from state 0 — when the early PSRAM trigger fires, before
     -- the shared cs_ram has switched from the VIC to the CPU.
     cpu_cs_ram <= cpu_ram_sel(cpuAddr, cpuWe, bankSwitch);
+
+    -- CPU-path ROM decode, independent of cpuHasBus (companion to cpu_cs_ram).
+    -- cpuAddr/cpuWe/bankSwitch are stable for the whole period, so this is valid
+    -- from state 0 when the early flash-ROM trigger fires in c64_system.
+    -- cpu_rom_sel encodes the region; c64_system treats /= "00" as "any ROM read".
+    cpu_rom_region_i <= cpu_rom_region(cpuAddr, cpuWe, bankSwitch);
+    cpu_rom_sel      <= cpu_rom_region_i;
 
 end architecture;

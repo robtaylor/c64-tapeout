@@ -73,7 +73,10 @@ module chip_core #(
     // QSPI PSRAM pads (ADR 0004 §2)
     localparam int PAD_PSRAM_CSN  = 33;
     localparam int PAD_PSRAM_SCK  = 34;
-    localparam int PAD_PSRAM_SIO0 = 35;  // sio1..3 = +1..+3; bidir[39] spare
+    localparam int PAD_PSRAM_SIO0 = 35;  // sio1..3 = +1..+3
+    // Flash chip-select (ADR 0005): shares SCK/SIO with the PSRAM, second CS on
+    // the last spare pad. Pad budget now fully consumed.
+    localparam int PAD_PSRAM_CS_FLASH = 39;
 
     // -----------------------------------------------------------------
     // C64 system ↔ memory/ROM signals
@@ -96,18 +99,22 @@ module chip_core #(
     wire        psram_we;
     wire        psram_is_lowpage;
     wire        psram_cs_n;
+    wire        psram_cs_flash_n;   // flash chip-select (CSN1), bidir[39]
     wire        psram_sck;
     wire [3:0]  psram_sio_o;
     wire [3:0]  psram_sio_oe;
     wire [3:0]  psram_sio_i;
+    wire        qspi_init_done;     // both enter-QPI passes (PSRAM + flash) complete -> release CPU
 
-    wire [15:0] rom_addr;
+    // External flash ROM path (ADR 0005): c64_system forms the 24-bit flash
+    // offset + early trigger; the controller returns the captured byte.
+    wire [23:0] rom_addr;           // c64_system -> controller (flash offset)
+    wire        rom_ce;             // c64_system -> controller (early trigger)
+    wire [7:0]  rom_dout;           // controller -> c64_system (captured byte)
+    wire        rom_ready;          // controller done strobe (unconsumed for now)
     wire        rom_cs_kernal;
     wire        rom_cs_basic;
     wire        rom_cs_chargen;
-    wire [7:0]  kernal_data;
-    wire [7:0]  basic_data;
-    wire [7:0]  chargen_data;
 
     // VIC video
     wire        vic_hsync;
@@ -154,7 +161,10 @@ module chip_core #(
     // -----------------------------------------------------------------
     c64_system c64_u (
         .clk32       (clk32),
-        .reset_n     (rst_n),
+        // Boot gating (ADR 0005): hold the C64 core in reset until BOTH QPI
+        // inits (PSRAM 0x35 + flash 0x38) complete, so the first reset-vector
+        // fetch ($FFFC/$FFFD -> KERNAL -> flash) returns valid data.
+        .reset_n     (rst_n & qspi_init_done),
 
         .ramAddr     (ram_addr),
         .ramDin      (ram_din),
@@ -166,10 +176,9 @@ module chip_core #(
         .psramAddr   (psram_addr),
         .psramWE     (psram_we),
 
-        .kernalData  (kernal_data),
-        .basicData   (basic_data),
-        .chargenData (chargen_data),
+        .romData     (rom_dout),
         .romAddr     (rom_addr),
+        .romCE       (rom_ce),
         .cs_kernal   (rom_cs_kernal),
         .cs_basic    (rom_cs_basic),
         .cs_chargen  (rom_cs_chargen),
@@ -265,37 +274,26 @@ module chip_core #(
     );
 
     qspi_psram_ctrl psram_u (
-        .clk     (clk),             // 64 MHz -> 32 MHz SCK (CLK_DIV=0)
-        .rst_n   (rst_n),
-        .ramAddr (psram_addr),      // CPU address (early trigger)
-        .ramDin  (ram_dout),        // CPU write data -> memory
-        .ramCE   (psram_ce & ~psram_is_lowpage),
-        .ramWE   (psram_we),
-        .ramDout (psram_rdata),     // memory read data -> CPU
-        .ready   (psram_ready),
-        .cs_n    (psram_cs_n),
-        .sck     (psram_sck),
-        .sio_o   (psram_sio_o),
-        .sio_oe  (psram_sio_oe),
-        .sio_i   (psram_sio_i)
-    );
-
-    // -----------------------------------------------------------------
-    // Synthesized ROMs
-    // -----------------------------------------------------------------
-    rom_kernal kernal_u (
-        .addr (rom_addr[12:0]),
-        .data (kernal_data)
-    );
-
-    rom_basic basic_u (
-        .addr (rom_addr[12:0]),
-        .data (basic_data)
-    );
-
-    rom_chargen chargen_u (
-        .addr (rom_addr[11:0]),
-        .data (chargen_data)
+        .clk        (clk),          // 64 MHz -> 32 MHz SCK (CLK_DIV=0)
+        .rst_n      (rst_n),
+        .ramAddr    (psram_addr),   // CPU address (early trigger)
+        .ramDin     (ram_dout),     // CPU write data -> memory
+        .ramCE      (psram_ce & ~psram_is_lowpage),
+        .ramWE      (psram_we),
+        .ramDout    (psram_rdata),  // memory read data -> CPU
+        .ready      (psram_ready),
+        // Read-only flash ROM port (KERNAL/BASIC/CHARGEN images, ADR 0005)
+        .romAddr    (rom_addr),     // 24-bit flash offset (early trigger)
+        .romCE      (rom_ce),
+        .romDout    (rom_dout),     // flash byte -> c64_system.romData
+        .romReady   (rom_ready),
+        .init_done  (qspi_init_done),
+        .cs_n       (psram_cs_n),
+        .cs_flash_n (psram_cs_flash_n),
+        .sck        (psram_sck),
+        .sio_o      (psram_sio_o),
+        .sio_oe     (psram_sio_oe),
+        .sio_i      (psram_sio_i)
     );
 
     // -----------------------------------------------------------------
@@ -362,6 +360,8 @@ module chip_core #(
         // QSPI PSRAM: CS# and SCK are always outputs
         out_drive[PAD_PSRAM_CSN] = psram_cs_n;
         out_drive[PAD_PSRAM_SCK] = psram_sck;
+        // QSPI flash CS# (ADR 0005): output-only, shares SCK/SIO with the PSRAM
+        out_drive[PAD_PSRAM_CS_FLASH] = psram_cs_flash_n;
         // SIO[3:0]: bidirectional, per-lane output enable from the controller
         for (pi = 0; pi < 4; pi = pi + 1) begin
             ie_mask[PAD_PSRAM_SIO0 + pi]   = 1'b1;
@@ -381,7 +381,7 @@ module chip_core #(
     wire _unused;
     assign _unused = &{1'b0, input_in, analog,
                        rom_cs_kernal, rom_cs_basic, rom_cs_chargen,
-                       cia_pa_oe_w, cia_pb_oe_w, psram_ready};
+                       cia_pa_oe_w, cia_pb_oe_w, psram_ready, rom_ready};
 
 endmodule
 

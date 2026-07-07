@@ -79,6 +79,14 @@ module qspi_psram_ctrl #(
     output logic [7:0]  romDout,   // flash -> CPU (read data)
     output logic        romReady,  // 1-cycle done strobe; romDout valid
 
+    // Init-complete strobe: high once the two-device enter-QPI init sequence
+    // (0x35 PSRAM + 0x38 flash) has finished and the engine is operational.
+    // Used by chip_core to hold the C64 core in reset until the first
+    // reset-vector fetch ($FFFC/$FFFD -> KERNAL -> flash) can return valid data
+    // (ADR 0005 boot-gating). Monotonic 0 -> 1: once the FSM reaches S_IDLE it
+    // never re-enters the init sequence, so this is a clean one-way release.
+    output logic        init_done,
+
     // QSPI pads (bus shared by PSRAM and flash)
     output logic        cs_n,      // PSRAM chip select  (CSN0), active low
     output logic        cs_flash_n,// flash chip select  (CSN1), active low
@@ -389,6 +397,10 @@ module qspi_psram_ctrl #(
   // one device is ever asserted.
   wire flash_active = frd_active || (init_active && init_dev);
   assign eng_csreg = flash_active ? 4'b0010 : 4'b0001;
+
+  // Boot gate: asserted once the FSM is past the enter-QPI init sequence
+  // (not S_RST and not one of the S_INIT_* states). See the port comment.
+  assign init_done = (state != S_RST) && !init_active;
 
   // Derive the lane output-enables the engine doesn't provide:
   //   std SPI  : drive SIO0, read SIO1   -> 0001

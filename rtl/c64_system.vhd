@@ -43,13 +43,15 @@ entity c64_system is
         psramAddr   : out unsigned(15 downto 0);
         psramWE     : out std_logic;
 
-        -- External ROM data
-        kernalData  : in  unsigned(7 downto 0);
-        basicData   : in  unsigned(7 downto 0);
-        chargenData : in  unsigned(7 downto 0);
-        romAddr     : out unsigned(15 downto 0);
+        -- External flash ROM interface (ADR 0005). KERNAL/BASIC/CHARGEN live in
+        -- one external QSPI flash at distinct base offsets; a single romData byte
+        -- is returned for whichever region the access hits. romAddr is the 24-bit
+        -- flash byte address, romCE the early read trigger (mirrors psramCE).
+        romData     : in  unsigned(7 downto 0);
+        romAddr     : out unsigned(23 downto 0);
+        romCE       : out std_logic;
 
-        -- ROM chip selects
+        -- ROM chip selects (region decodes, exposed for debug)
         cs_kernal   : out std_logic;
         cs_basic    : out std_logic;
         cs_chargen  : out std_logic;
@@ -118,6 +120,8 @@ architecture rtl of c64_system is
     signal cs_cia1_int  : std_logic;
     signal cs_ram_int   : std_logic;
     signal cpu_cs_ram_int : std_logic;
+    signal cpu_rom_sel_int: unsigned(1 downto 0);
+    signal rom_flash_addr : unsigned(23 downto 0);
     signal cs_kernal_int: std_logic;
     signal cs_basic_int : std_logic;
     signal cs_chargen_int: std_logic;
@@ -295,9 +299,7 @@ begin
         aec         => aec,
 
         ramData     => ramDin,
-        chargenData => chargenData,
-        kernalData  => kernalData,
-        basicData   => basicData,
+        romData     => romData,
 
         bankSwitch  => cpuIO(2 downto 0),
 
@@ -322,6 +324,7 @@ begin
         cs_cia1     => cs_cia1_int,
         cs_ram      => cs_ram_int,
         cpu_cs_ram  => cpu_cs_ram_int,
+        cpu_rom_sel => cpu_rom_sel_int,
         cs_kernal   => cs_kernal_int,
         cs_basic    => cs_basic_int,
         cs_chargen  => cs_chargen_int
@@ -451,7 +454,34 @@ begin
     psramAddr <= cpuAddr;
     psramWE   <= cpuWe;
 
-    romAddr    <= systemAddr;
+    -- Early flash-ROM trigger: mirrors the PSRAM early-trigger above. Fires one
+    -- clean pulse at the start of the period (state 0) for a CPU ROM read, so the
+    -- ~0.5 us QPI flash read (ADR 0005 2026-07-07 amendment) closes well before
+    -- the state-31 CPU sample. cpu_rom_sel /= "00" is the ungated CPU-path ROM
+    -- decode and is mutually exclusive with cpu_cs_ram, so only one of
+    -- psramCE/romCE fires in any given period — no CPU-side engine contention.
+    --
+    -- Flash offset map (ADR 0005 / rom-flash-integration.md task 4):
+    --   KERNAL  ("01") @ 0x000000, 8 KB, cpuAddr(12 downto 0)
+    --   BASIC   ("10") @ 0x002000, 8 KB, cpuAddr(12 downto 0)
+    --   CHARGEN ("11") @ 0x004000, 4 KB, cpuAddr(11 downto 0)
+    -- Formed by concatenation (base bit + address low bits) to keep it arithmetic-
+    -- free and synth-clean. VIC CHARGEN fetches (phi1) are NOT triggered here — as
+    -- with the PSRAM VIC path they read the controller's last romDout; the VIC-vs-
+    -- CPU worst-case concurrency is the ADR 0005 deferred question (see handoff).
+    process(cpu_rom_sel_int, cpuAddr)
+    begin
+        case cpu_rom_sel_int is
+            when "01"   => rom_flash_addr <= "00000000000"  & cpuAddr(12 downto 0); -- KERNAL 0x000000
+            when "10"   => rom_flash_addr <= "00000000001"  & cpuAddr(12 downto 0); -- BASIC  0x002000
+            when "11"   => rom_flash_addr <= "000000000100" & cpuAddr(11 downto 0); -- CHARGEN 0x004000
+            when others => rom_flash_addr <= (others => '0');
+        end case;
+    end process;
+
+    romCE   <= '1' when cpu_rom_sel_int /= "00" and sysCycle = CYCLE_EXT0 else '0';
+    romAddr <= rom_flash_addr;
+
     cs_kernal  <= cs_kernal_int;
     cs_basic   <= cs_basic_int;
     cs_chargen <= cs_chargen_int;
