@@ -174,6 +174,19 @@ class QspiPsramModel:
             # release the bus between transactions
             self.sio_i.value = 0
 
+    async def _do_quad_read(self) -> None:
+        """Serve one ``0xEB`` quad read: addr (24×4) + dummy + one data byte.
+
+        Shared by the PSRAM responder here and the read-only flash subclass, so
+        the read wire-protocol is single-sourced.
+        """
+        addr = await self._recv(24, 4) & (self.size - 1)
+        await self._dummy(self.read_dummy_cycles)
+        byte = self.mem[addr]
+        await self._send_byte_quad(byte)
+        self.reads.append((addr, byte))
+        await self._wait_cs_high()
+
     async def _transaction(self) -> None:
         cmd_lanes = 4 if self.qpi else 1
         cmd = await self._recv(8, cmd_lanes)
@@ -184,12 +197,7 @@ class QspiPsramModel:
             return
 
         if cmd == CMD_READ_QUAD:
-            addr = await self._recv(24, 4) & (self.size - 1)
-            await self._dummy(self.read_dummy_cycles)
-            byte = self.mem[addr]
-            await self._send_byte_quad(byte)
-            self.reads.append((addr, byte))
-            await self._wait_cs_high()
+            await self._do_quad_read()
             return
 
         if cmd == CMD_WRITE_QUAD:
