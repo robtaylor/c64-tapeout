@@ -22,13 +22,13 @@ Delete the 20 KB of LUT-synthesized ROMs and serve KERNAL/BASIC/CHARGEN from an 
 
 ## Tasks (dependency order)
 
-1. **Flash read path in the controller.** ✅ *Landed (commit 522d65c) as single-I/O `0x0B`; being revised to QPI `0xEB` per the 2026-07-07 ADR amendment.* Add the flash CS + read-only `0xEB` QPI read (reuse the quad stimulus) + flash enter-QPI init on CSN1 + a two-device arbiter to `qspi_psram_ctrl`. Standalone cocotb test with a read-only QPI flash BFM (subclass `QspiPsramModel`).
-2. **ROM prefetch buffer.** On-die line buffer for sequential flash reads; serves ROM/CHARGEN fetches. Co-design with the VIC c-access buffer.
-3. **`chip_core.sv` wiring.** Instantiate the flash path; add CS_flash at bidir[39]; route `cs_kernal/basic/chargen` reads to the flash ROM port; **delete** the `rom_kernal`/`rom_basic`/`rom_chargen` instances.
-4. **`c64_buslogic` / `c64_system` ROM data routing.** Point the KERNAL/BASIC/CHARGEN read data at the flash port; add the base-offset map. `cs_*` decodes unchanged.
-5. **Boot gating.** Hold CPU reset until flash + PSRAM init complete.
-6. **Cleanup.** Remove `src/rom_kernal.sv`, `src/rom_basic.sv`, `src/rom_chargen.sv`, `scripts/mif2rom.py` (or repurpose to program the flash image); update `rtl.f`, the Makefile synth-test list, `librelane/config.yaml` VERILOG_FILES, and CLAUDE.md.
-7. **Re-run PnR.** `make librelane-pdn` — with the LUT ROMs gone, GlobalRouting should converge (this is the whole point). Then trace to signoff.
+1. **Flash read path in the controller.** ✅ *Done (QPI `0xEB`, commit 3f8e921).* Flash CS + read-only `0xEB` QPI read (reusing the quad stimulus) + flash enter-QPI init on CSN1 + two-device arbiter in `qspi_psram_ctrl`. `make sim-qspi` 6/6 with a read-only QPI flash BFM (`QspiFlashModel(QspiPsramModel)`).
+2. **ROM prefetch buffer.** *Deferred (optimization, not load-bearing — the 0.5 µs QPI read fits the cycle; ADR 0005 amendment).* On-die line buffer for sequential flash reads. **This is where the VIC CHARGEN path gets wired to issue its own flash reads (today it reads the controller's held `romDout`), finally exercising the worst-case CPU+VIC concurrency the arbiter is built for.** Co-design with the VIC c-access buffer.
+3. **`chip_core.sv` wiring.** ✅ *Done (commit ca3f2c7).* Flash port + `init_done` wired; `cs_flash_n` at bidir[39]; `rom_kernal`/`rom_basic`/`rom_chargen` instances deleted (`.sv` files remain until task 6).
+4. **`c64_buslogic` / `c64_system` ROM data routing.** ✅ *Done (commit ca3f2c7).* Single `romData` byte selected by the existing `cs_*` decode; early ROM trigger at `CYCLE_EXT0` (mirrors `psramCE`); flash offset map KERNAL@0x000000 / BASIC@0x002000 / CHARGEN@0x004000. ROM PLA decode unified via `cpu_rom_region()`.
+5. **Boot gating.** ✅ *Done (commit ca3f2c7).* Controller `init_done`; C64 core held in reset until `qspi_init_done` (both enter-QPI passes complete).
+6. **Cleanup.** Remove `src/rom_kernal.sv`, `src/rom_basic.sv`, `src/rom_chargen.sv`; update `rtl.f`, the Makefile synth-test list, `librelane/config.yaml` VERILOG_FILES, and CLAUDE.md ("ROMs synthesized as LUTs" → external flash). **⚠ Landmine:** `chip_core_tb.py`'s `extract_rom_bytes()` parses the generated `rom_*.sv` for the flash BFM images — deleting those files breaks `sim-smoke`. Task 6 must first repurpose `scripts/mif2rom.py` (or a sibling) to emit a checked-in flat ROM-image fixture that both the test and flash-provisioning consume, *then* delete the `.sv`.
+7. **Re-run PnR.** `make librelane-pdn` — with the LUT ROMs gone from the hierarchy, GlobalRouting should converge (this is the whole point). Needs the task-6 `config.yaml` source-list update first, plus SDC/pin constraints for the new `cs_flash_n` at bidir[39]. Then trace to signoff.
 8. **Cosim.** Add the flash model to the Jacquard cosim (it already models QSPI flash) alongside PSRAM; replay through the post-PnR netlist (WS-P2-6).
 
 ## Exit criteria
