@@ -10,9 +10,9 @@ Delete the 20 KB of LUT-synthesized ROMs and serve KERNAL/BASIC/CHARGEN from an 
 
 **Bus topology (ADR 0005 §2).** Shared QSPI: SCK = bidir[34], SIO[3:0] = bidir[35..38] (shared with PSRAM); CS_psram = bidir[33]; **CS_flash = bidir[39]** (last spare pad — budget now fully consumed). One PULP serial engine, two chip-selects, arbitrated.
 
-**Controller (ADR 0005 §3).** Extend `qspi_psram_ctrl` (or a thin sibling sharing the engine) with:
-- a flash chip-select + a **read-only** fast-read (0x0B, or 0xEB quad matching the PSRAM QPI path);
-- an **arbiter** that serializes PSRAM (RAM) and flash (ROM) requests onto the single engine — RAM and ROM are never needed on the same SCK, but VIC (CHARGEN) + CPU (instruction fetch + RAM) can contend within a cycle, so arbitration + the prefetch buffer must cover the worst case (re-measure in integrated sim, as with the PSRAM early-trigger).
+**Controller (ADR 0005 §3 + 2026-07-07 amendment).** Extend `qspi_psram_ctrl` with:
+- a flash chip-select + a **read-only `0xEB` QPI quad read** — the flash is a read-only PSRAM on CSN1, reusing the engine's existing quad stimulus (the amendment resolved single-I/O `0x0B` → QPI `0xEB`: the PULP engine is single/quad-only, and a 1.5 µs single read overruns the CPU cycle where a 0.5 µs QPI read fits). Requires a QPI-capable NOR flash + QE bit at provisioning + an enter-QPI init on CSN1 mirroring the PSRAM's `0x35`;
+- an **arbiter** that serializes PSRAM (RAM) and flash (ROM) requests onto the single engine — RAM and ROM are never needed on the same SCK, but VIC (CHARGEN) + CPU (instruction fetch + RAM) can contend within a cycle, so arbitration covers the worst case (re-measure in integrated sim, as with the PSRAM early-trigger).
 
 **ROM prefetch buffer (ADR 0005 §4).** Small on-die buffer (a cache line or two) fed by sequential flash reads. Instruction fetch and CHARGEN reads are sequential, so a hit serves in-cycle and only line-fill pays the QSPI latency. Design alongside the VIC c-access line-buffer (the deferred WS-P2-2 task 5) — same mechanism.
 
@@ -22,7 +22,7 @@ Delete the 20 KB of LUT-synthesized ROMs and serve KERNAL/BASIC/CHARGEN from an 
 
 ## Tasks (dependency order)
 
-1. **Flash read path in the controller.** Add the flash CS + read-only fast-read + a two-device arbiter to `qspi_psram_ctrl` (or sibling). Standalone cocotb test with a QSPI flash BFM (mirror `qspi_psram_model.py`; a read-only variant).
+1. **Flash read path in the controller.** ✅ *Landed (commit 522d65c) as single-I/O `0x0B`; being revised to QPI `0xEB` per the 2026-07-07 ADR amendment.* Add the flash CS + read-only `0xEB` QPI read (reuse the quad stimulus) + flash enter-QPI init on CSN1 + a two-device arbiter to `qspi_psram_ctrl`. Standalone cocotb test with a read-only QPI flash BFM (subclass `QspiPsramModel`).
 2. **ROM prefetch buffer.** On-die line buffer for sequential flash reads; serves ROM/CHARGEN fetches. Co-design with the VIC c-access buffer.
 3. **`chip_core.sv` wiring.** Instantiate the flash path; add CS_flash at bidir[39]; route `cs_kernal/basic/chargen` reads to the flash ROM port; **delete** the `rom_kernal`/`rom_basic`/`rom_chargen` instances.
 4. **`c64_buslogic` / `c64_system` ROM data routing.** Point the KERNAL/BASIC/CHARGEN read data at the flash port; add the base-offset map. `cs_*` decodes unchanged.
