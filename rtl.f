@@ -8,10 +8,7 @@ rtl/mos6526.v
 # SRAM wrapper
 src/sram_wrapper.sv
 
-# Synthesized ROMs
-src/rom_kernal.sv
-src/rom_basic.sv
-src/rom_chargen.sv
+# ROMs (KERNAL/BASIC/CHARGEN) are external QSPI flash — ADR 0005, no on-die RTL.
 
 # Tapeout integration
 src/chip_core.sv

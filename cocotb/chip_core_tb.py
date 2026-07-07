@@ -24,7 +24,6 @@ Invocation:
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
 import cocotb
@@ -52,33 +51,9 @@ PAD_PSRAM_CS_FLASH = 39  # flash CS# (ADR 0005), shares SCK/SIO with PSRAM
 QRD_DUMMY_CYCLES = 6  # must match the RTL's QRD_DUMMY parameter
 FRD_DUMMY_CYCLES = 6  # must match the RTL's FRD_DUMMY parameter (flash 0xEB QPI)
 
-# Flash offset map (ADR 0005 / rom-flash-integration.md task 4)
-FLASH_OFF_KERNAL  = 0x000000  # 8 KB
-FLASH_OFF_BASIC   = 0x002000  # 8 KB
-FLASH_OFF_CHARGEN = 0x004000  # 4 KB
-
-
-# --------------------------------------------------------------------- #
-#  ROM image extraction from the generated LUT-ROM case statements
-# --------------------------------------------------------------------- #
-def extract_rom_bytes(sv_path: Path, depth: int) -> bytes:
-    """Extract the ROM contents from a generated ``rom_*.sv`` case statement.
-
-    The generated modules (scripts/mif2rom.py) encode each populated address as
-    ``N'hAAAA: data = 8'hVV;`` plus a ``default: data = 8'hVV;`` for the common
-    fill byte. We rebuild the flat byte image so the flash BFM returns exactly
-    the bytes the deleted LUT ROMs would have — a valid KERNAL reset vector at
-    the mapped $FFFC/$FFFD is essential for boot.
-    """
-    text = sv_path.read_text()
-    m = re.search(r"default:\s*data = 8'h([0-9A-Fa-f]{2})", text)
-    default = int(m.group(1), 16) if m else 0
-    mem = bytearray([default] * depth)
-    for addr_hex, val_hex in re.findall(
-        r"\d+'h([0-9A-Fa-f]+):\s*data = 8'h([0-9A-Fa-f]{2})", text
-    ):
-        mem[int(addr_hex, 16)] = int(val_hex, 16)
-    return bytes(mem)
+# The KERNAL/BASIC/CHARGEN flash offset map (ADR 0005) lives in
+# scripts/build_flash_image.py, which bakes it into cocotb/fixtures/
+# c64_flash_rom.bin — the pre-laid-out image loaded below.
 
 
 # --------------------------------------------------------------------- #
@@ -230,22 +205,20 @@ async def test_boot_smoke(dut):
     cocotb.start_soon(bfm.run())
 
     # Attach the read-only flash BFM on the flash CS (bidir[39]), sharing the
-    # SCK/SIO bus. Preload the REAL KERNAL/BASIC/CHARGEN images (extracted from
-    # the generated LUT-ROM case statements) at the ADR 0005 offset map, so the
-    # reset-vector fetch ($FFFC/$FFFD -> KERNAL) and KERNAL code fetches return
-    # correct bytes over QPI (ADR 0005 boot path).
-    src = Path(__file__).resolve().parent.parent / "src"
-    kernal_img  = extract_rom_bytes(src / "rom_kernal.sv", 8192)
-    basic_img   = extract_rom_bytes(src / "rom_basic.sv", 8192)
-    chargen_img = extract_rom_bytes(src / "rom_chargen.sv", 4096)
+    # SCK/SIO bus. Preload the combined ROM image fixture (KERNAL/BASIC/CHARGEN
+    # laid out at the ADR 0005 offset map by scripts/build_flash_image.py) — the
+    # same image programmed into the physical QSPI flash — so the reset-vector
+    # fetch ($FFFC/$FFFD -> KERNAL) and KERNAL code fetches return correct bytes
+    # over QPI (ADR 0005 boot path).
+    flash_img = (
+        Path(__file__).resolve().parent / "fixtures" / "c64_flash_rom.bin"
+    ).read_bytes()
     # Sanity: the KERNAL reset vector at $FFFC/$FFFD maps to flash 0x1FFC/0x1FFD.
-    reset_vec = kernal_img[0x1FFC] | (kernal_img[0x1FFD] << 8)
+    reset_vec = flash_img[0x1FFC] | (flash_img[0x1FFD] << 8)
     assert reset_vec == 0xFCE2, f"unexpected KERNAL reset vector ${reset_vec:04X}"
 
     flash = ChipCoreFlashBFM(dut, read_dummy_cycles=FRD_DUMMY_CYCLES)
-    flash.load(FLASH_OFF_KERNAL, kernal_img)
-    flash.load(FLASH_OFF_BASIC, basic_img)
-    flash.load(FLASH_OFF_CHARGEN, chargen_img)
+    flash.load(0x000000, flash_img)  # image is pre-laid-out at the offset map
     cocotb.start_soon(flash.run())
 
     await reset(dut, hold_ns=500)

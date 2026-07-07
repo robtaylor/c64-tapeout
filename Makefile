@@ -112,9 +112,6 @@ synth-test: $(GHDL_VERILOG) ## Synthesize design with Yosys (no PDK, generic cel
 		read_verilog -sv ip/pulp/spi_master_controller.sv; \
 		read_verilog -sv rtl/qspi_psram_ctrl.sv; \
 		read_verilog -sv src/zpstack_sram.sv; \
-		read_verilog -sv src/rom_kernal.sv; \
-		read_verilog -sv src/rom_basic.sv; \
-		read_verilog -sv src/rom_chargen.sv; \
 		read_verilog -sv src/chip_core.sv; \
 		hierarchy -top chip_core -chparam NUM_INPUT_PADS 12 -chparam NUM_BIDIR_PADS 40 -chparam NUM_ANALOG_PADS 2; \
 		synth -top chip_core -flatten; \

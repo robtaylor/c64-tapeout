@@ -51,7 +51,7 @@ VHDL is synthesized via the GHDL-Yosys plugin (ghdl --synth → Yosys RTLIL).
 ## Key constraints
 
 - Clock: single-domain, 32 MHz (C64 system clock). 32-state sequencer → ~8 MHz pixel, ~1 MHz CPU. See ADR 0001.
-- Memory (hybrid, ADR 0004): bulk 64 KB in external QSPI PSRAM via `qspi_psram_ctrl`; on-die 5V ZP/stack SRAM ($0000–$01FF) = 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1`; color RAM stays flops; ROMs synthesized as LUTs. c64_system fires an early PSRAM trigger at the start of each period so the ~500 ns quad read closes before the CPU sample.
+- Memory (hybrid, ADR 0004): bulk 64 KB in external QSPI PSRAM via `qspi_psram_ctrl`; on-die 5V ZP/stack SRAM ($0000–$01FF) = 2× `gf180mcu_fd_ip_sram__sram256x8m8wm1`; color RAM stays flops; KERNAL/BASIC/CHARGEN ROMs in external QSPI flash on the shared bus (ADR 0005, `0xEB` QPI read on CSN1, image built by `scripts/build_flash_image.py`). c64_system fires early PSRAM and ROM triggers at the start of each period so the ~500 ns quad reads close before the CPU sample.
 - PDK: gf180mcu_fd_sc_mcu9t5v0 (9-track 5V). Must export STD_CELL_LIBRARY before LibreLane.
 - Slot: 1×1 (3932×5122 µm die).
 

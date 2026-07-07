@@ -25,10 +25,7 @@ VERILOG_FILES:
 # On-die 5V ZP/stack SRAM (2× sram256x8; instantiates the macro under USE_SRAM_MACROS)
 - dir::../src/zpstack_sram.sv
 
-# Synthesized ROMs
-- dir::../src/rom_kernal.sv
-- dir::../src/rom_basic.sv
-- dir::../src/rom_chargen.sv
+# ROMs (KERNAL/BASIC/CHARGEN) are external QSPI flash — ADR 0005, no on-die RTL.
 
 # Tapeout integration
 - dir::../src/chip_core.sv
