@@ -1,0 +1,86 @@
+---
+session: c64-pnr-rom-flash
+date: 2026-07-07
+status: complete
+outcome: SUCCEEDED
+---
+
+goal: >
+  WS-P2-10 flash-ROM integration DONE (tasks 1,3,4,5,6). The C64 core boots from
+  external QSPI flash in integrated sim AND — the payoff — routes cleanly in PnR:
+  GlobalRouting converges in 6s (vs 3+ hrs non-convergent before the pivot),
+  route-DRC=0, antennas=0, GDS produced. The ADR-0005 flash-ROM pivot fixed the
+  WS-P2-3 routing wall. All pushed to origin/main (HEAD 7a9cc99).
+
+now: >
+  Timing closure. make librelane-pdn routes but STA is NOT closed: setup WNS
+  -3.4ns / TNS -6.8ns / 10 violating endpoints; plus DRV (slew 1134, cap 1099,
+  fanout 440). Hold is clean (WNS +0.34, 0 vio). Identify which clock domain the
+  10 setup paths sit on (64MHz QSPI clk vs 32MHz clk32), then buffer/resize/upsize
+  to close. Then full signoff (make librelane w/ DRC+LVS). Metrics:
+  librelane/runs/RUN_2026-07-07_21-34-16/final/metrics.json.
+
+test: >
+  nix develop -c make sim-smoke  (boots from flash: reset-vec 0x1FFC/0x1FFD,
+  flash reads=1378, psram 177/175, hsync=62). make sim-qspi (6/6).
+  make synth-test (1 warning: tri-state note). make librelane-pdn (routes; GDS at
+  final/gds/chip_top.gds).
+
+done_this_session:
+  - task: "ADR 0005 amendment (972991d): flash read = QPI 0xEB, NOT single-I/O 0x0B. PULP engine is single/quad-only (no dual) - verified ip/pulp/spi_master_tx.sv:42,85. Single 0x0B read=1.5us overruns the ~1us CPU cycle; QPI 0xEB=16 SCK=0.5us fits + reuses the quad stimulus. DIO/XIP/mixed-lane rejected + why, all in the amendment."
+    files: [docs/adr/0005-external-flash-roms.md, docs/plans/rom-flash-integration.md]
+  - task: "WS-P2-10 task 1 (3f8e921): read-only flash ROM path + two-device arbiter in qspi_psram_ctrl.sv. Flash=read-only PSRAM on CSN1, 0xEB QPI, enter-QPI init merged into ONE shared 3-state seq gated by init_dev (PSRAM 0x35 then flash 0x38) - keeps state enum at 13/16. QspiFlashModel(QspiPsramModel) read-only subclass; shared _do_quad_read. sim-qspi 6/6."
+    files: [rtl/qspi_psram_ctrl.sv, cocotb/qspi_flash_model.py, cocotb/qspi_psram_tb.py, cocotb/qspi_psram_model.py]
+  - task: "WS-P2-10 tasks 3-5 (ca3f2c7): full-chip integration - core BOOTS from flash. Early ROM trigger in c64_system.vhd (romCE at CYCLE_EXT0, mirrors psramCE); offset map KERNAL@0x0000/BASIC@0x2000/CHARGEN@0x4000; single romData routing via unified cpu_rom_region() decode; chip_core wires flash port + cs_flash_n@bidir[39] + deletes rom_* LUT instances; boot gating reset_n=rst_n&qspi_init_done; controller init_done output."
+    files: [rtl/c64_system.vhd, rtl/c64_buslogic.vhd, src/chip_core.sv, cocotb/chip_core_tb.py, rtl/qspi_psram_ctrl.sv]
+  - task: "WS-P2-10 task 6 (7a9cc99): deleted LUT-ROM sources. scripts/build_flash_image.py -> checked-in cocotb/fixtures/c64_flash_rom.bin (KERNAL/BASIC/CHARGEN at offset map = the flash-provisioning artifact). Test loads fixture (no more .sv parsing). Deleted src/rom_*.sv + scripts/mif2rom.py; dropped from rtl.f/Makefile/config.yaml; updated CLAUDE.md."
+    files: [scripts/build_flash_image.py, cocotb/fixtures/c64_flash_rom.bin, cocotb/chip_core_tb.py, rtl.f, Makefile, librelane/config.yaml, CLAUDE.md]
+  - task: "Task 7: ran make librelane-pdn to completion. GlobalRouting converged in 6s, route-DRC=0, antennas=0, GDS+DEF written. Structural PnR SUCCESS; timing not closed (see now:)."
+    files: []
+
+blockers: []
+
+questions:
+  - "Which clock domain do the 10 setup-violating paths (WNS -3.4ns) sit on? 64MHz QSPI clk (15.6ns, so -3.4 is a hard miss) vs 32MHz clk32 (31ns, ~11% over)? Drives the closure approach. Check the STA path report in the run dir."
+  - "Do the ~1000+ max-cap/slew violations need resizing/upsizing or a constraint (max_transition/max_cap) + rebuffer pass? Utilization is low (19%) so there is room."
+  - "Worst-case concurrency (VIC CHARGEN + CPU RAM/fetch in one cycle) still UNMEASURED - VIC CHARGEN currently reads the controller's held romDout, doesn't issue its own flash read. Only exercised once task 2 (prefetch/line-buffer) wires the VIC to fetch."
+
+decisions:
+  - flash_qpi_0xEB: "Assume a QPI-capable NOR flash (QE set at provisioning) so the flash reuses the PSRAM quad path at 0.5us/read. User confirmed QPI parts are well-stocked. Engine can't do dual (verified) or mixed-lane NOR reads, so full-QPI is the only fast option that fits."
+  - early_rom_trigger_mirrors_psram: "romCE fires at CYCLE_EXT0 like psramCE; cpu_cs_rom/cpu_cs_ram mutually exclusive so only ONE QSPI transaction per period. Same discipline as WS-P2-2 PSRAM early-trigger."
+  - fixture_first_task6: "Emit cocotb/fixtures/c64_flash_rom.bin BEFORE deleting rom_*.sv (the test's only ROM-byte source), so sim-smoke never breaks. build_flash_image.py is dual-use (test + physical flash provisioning)."
+  - prefetch_deferred: "ADR 0005 amendment: with 0.5us QPI reads the prefetch buffer is an OPTIMIZATION, not load-bearing. Deferred as task 2."
+
+findings:
+  - pnr_pivot_worked: "Removing the 20KB LUT-ROM mux fabric from the hierarchy is THE fix. GRT: 6s vs 3+hrs. route-DRC=0. synth peak mem 325->220MB, synth warnings 26->3. This validates ADR 0005 end-to-end."
+  - jacquard_source_line_passthrough: "The Jacquard pre-release installed on this Mac now has SOURCE LINE PASS THROUGH - makes it much easier to figure out where wires come from. Useful for BOTH timing-closure debug (tracing the 10 setup paths back to RTL) AND task 8 (Jacquard PSRAM+flash cosim on the post-PnR netlist). See [[jacquard-cosim-psram-qspi]]."
+  - engine_en_quad_per_transaction: "PULP engine en_quad_int (spi_master_controller.sv:531-535) is a PER-TRANSACTION latch (set on qrd/qwr, clears at IDLE), NOT a sticky QPI-mode bit. So the flash enter-QPI (0x38, eng_wr) goes out single-lane even after the PSRAM's 0x35 - correct on real silicon, not just sim."
+  - background_agents_stalled: "TWO background review/impl agents stalled on the 600s stream watchdog this session (altitude review + first tasks-3-5 kraken). FOREGROUND kraken runs completed fine. Prefer foreground for substantial agent work; a stalled agent may still have applied partial edits - check the tree before relaunching."
+
+worked:
+  - "nohup+disown for the long PnR run (harness kills bg Bash at 600s); Monitor tool (up to 3600000ms) to watch. First Monitor filter was too chatty (per-routing-pass events) - re-armed with a terminal-only filter (pgrep -f librelane gone OR [ERROR]/Traceback)."
+  - "Mirroring the proven WS-P2-2 PSRAM early-trigger for ROM instead of inventing a new mechanism."
+  - "/simplify after each RTL change caught real drift risks (cpu_rom_region vs inline decode - 3 agents flagged; unified it). Skipped /simplify on task-6 (mechanical deletions)."
+  - "Fixture-first task 6: verify sim-smoke boots from the fixture BEFORE deleting the .sv."
+
+failed:
+  - "Trusting tee|grep to capture the yosys warning: the Makefile itself pipes yosys through 'tee build/synth_test.log | tail -30', so inline warnings scroll past - read build/synth_test.log, not stdout."
+  - "run_in_background:false on the Agent tool still launched async; one such launch got user-interrupted but had already applied its edits - always re-check the working tree after an interrupted/stalled agent."
+
+next:
+  - "Timing closure: pull the setup STA path report from librelane/runs/RUN_2026-07-07_21-34-16 (or re-run), identify the 10 violating endpoints' clock domain + start/end, then rebuffer/resize/upsize. Re-run make librelane-pdn to confirm WNS improves."
+  - "Once timing holds: make librelane (full signoff with Magic/KLayout DRC + Netgen LVS)."
+  - "Task 8 (WS-P2-6): Jacquard PSRAM+flash cosim on final/pnl (post-PnR netlist now exists). Jacquard already models QSPI flash; use the new source-line passthrough. See thoughts/shared/handoffs/jacquard-qspi-cosim/."
+  - "Task 2 (deferred): ROM prefetch / VIC c-access line-buffer - wire VIC CHARGEN to issue its own flash reads, then re-measure worst-case CPU+VIC concurrency (ADR 0005 deferred question)."
+
+files:
+  created:
+    - scripts/build_flash_image.py
+    - cocotb/fixtures/c64_flash_rom.bin
+    - "thoughts/shared/handoffs/c64-pnr-rom-flash/2026-07-07_23-40_ws-p2-10-flash-rom-boots-and-routes.yaml"
+  modified:
+    - "rtl/qspi_psram_ctrl.sv, rtl/c64_system.vhd, rtl/c64_buslogic.vhd, src/chip_core.sv (all pushed)"
+    - "cocotb/chip_core_tb.py, cocotb/qspi_flash_model.py, cocotb/qspi_psram_tb.py, cocotb/qspi_psram_model.py (pushed)"
+    - "docs/adr/0005-external-flash-roms.md, docs/plans/rom-flash-integration.md, rtl.f, Makefile, librelane/config.yaml, CLAUDE.md (pushed)"
+  deleted:
+    - "src/rom_kernal.sv, src/rom_basic.sv, src/rom_chargen.sv, scripts/mif2rom.py (pushed)"
