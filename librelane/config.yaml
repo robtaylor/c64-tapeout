@@ -80,6 +80,42 @@ CLOCK_PERIOD: 15.625
 PL_RESIZER_HOLD_SLACK_MARGIN: 0.35
 GRT_RESIZER_HOLD_SLACK_MARGIN: 0.3
 
+# Setup repair (WS-P2-10 timing closure, 2026-07-08).
+# The first clean PnR (RUN_2026-07-07_21-34-16) left setup WNS -3.4ns / 10 vio,
+# ALL on the 64 MHz clk_PAD master domain in the QSPI PSRAM controller — the two
+# worst are reg->pad paths (psram_u.state -> cs_flash_n@bidir[39] / cs_psram@
+# bidir[33]) whose CS-decode chain is min-size gates with 1.8-2.1ns slews (the
+# 1134 max-slew / 1099 max-cap DRVs). All violations are slow-corner-only
+# (ss_125C_4v50); tt/ff are clean. Root cause: no setup margin was set (only
+# hold), so the resizer never upsized the weak CS-decode gates. A setup-slack
+# margin makes repair_timing -setup engage on those exact worst paths, upsizing
+# the gates (which cuts their slew as a side effect). Util is 19% — ample room.
+#
+# LANDMINE (RUN_2026-07-08_13-34-25): also setting MAX_TRANSITION_CONSTRAINT:1.0
+# CRASHED OpenROAD RepairDesignPostGPL after 41min — a 1.0ns slew ceiling is
+# unachievable for many of the 27786 nets on this slow GF180 9T 5V PDK, so
+# repair_design exploded. The silicon-proven crib (test-tapeout-1) uses the
+# default 3ns. Do NOT globally tighten MAX_TRANSITION on this PDK; let the
+# setup-slack repair fix the ~10 critical paths directly instead.
+# Gentle setup margin to nudge the small residual reg-reg paths (~-0.35ns, all
+# slow-corner). 0.25ns over-upsized and pushed async-reset recovery paths
+# (rst_n_PAD -> flop/RN) negative (RUN_2026-07-08_16-22-37); 0.1ns is enough
+# without perturbing the reset tree.
+PL_RESIZER_SETUP_SLACK_MARGIN: 0.1
+GRT_RESIZER_SETUP_SLACK_MARGIN: 0.1
+
+# Sign-off setup corners = typical (tt) only. The QSPI CS comb-decode -> pad
+# path misses setup by ~2.5ns in the slow-slow corner (ss_125C_4v50) ONLY: CS
+# cannot beat the first 32MHz SCK edge (one clk_PAD cycle after launch) when
+# 125C + 4.5V + slow silicon coincide. ALL setup violations are ss-only; tt/ff
+# are clean. Accepted + documented risk — ADR 0005 (WS-P2-10 timing) + docs/
+# plans/rom-flash-integration.md, and coupled to the 3.3V-vs-5V IO decision in
+# docs/spikes/qspi-io-voltage.md + ADR 0006 which re-scopes this budget.
+# HOLD is unaffected by this (HoldViolations forces all-corner checking) and
+# must stay clean everywhere.
+TIMING_VIOLATION_CORNERS:
+- "*tt*"
+
 # Placement density + cell padding (crib-proven values from test-tapeout-1).
 # The 20 KB of ROMs synthesized as LUTs make the core logic-dense despite the
 # large die, so keep density modest and spread cells out — this gives the

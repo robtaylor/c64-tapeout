@@ -61,6 +61,58 @@ Per-single-byte read cost at 32 MHz SCK (31.25 ns/cycle), phases as `bits×lanes
 - **Mixed-lane `0x6B` / `0xEB`-QIO-from-SPI.** Rejected — the engine drives the command quad in quad mode, so only a fully-QPI flash matches it.
 - **XIP / continuous-read mode (M7–M0).** Rejected as separate work — its only saving is the command byte on back-to-back reads, which the on-die prefetch buffer (§4) already amortizes by sending command+address once per line-fill; it adds mode-bit protocol state for redundant benefit.
 
+## Amendment (2026-07-09) — WS-P2-10 timing closure: QSPI outputs are source-synchronous; slow-corner CS setup is an accepted risk
+
+Closing STA on the flash-ROM design (WS-P2-10 task 7) surfaced a setup WNS of
+**−3.4 ns on the two chip-select pads** (`cs_flash_n`@bidir[39], `cs_psram`
+@bidir[33]), 10 violating endpoints, *all in the slow corners* (`ss_125C_4v50`);
+`tt`/`ff` were clean. The path is a ~9-gate combinational decode of the QSPI
+controller/engine state to the CS pad. Two things were learned resolving it:
+
+**1. The QSPI outputs are a source-synchronous interface and must not be timed
+against the internal clock.** CS and SIO are latched by the external APS1604M
+PSRAM on the *emitted SCK*, not on `clk_PAD`. The stock 20%-of-period
+(`output_delay` = 3.125 ns) blanket against `clk_PAD` is the wrong model. The
+honest constraint uses the device's real AC specs (APS1604M-3SQR v3.1: tCSP =
+2.5 ns CS setup, tCHD = 3.0 ns CS hold, tSP/tHD = 2 ns data). Because SCK =
+`clk_PAD`/2 with rising edges *coincident* with `clk_PAD` edges, this reduces to
+a single-cycle `clk_PAD` path with `output_delay` = the device setup — see
+`librelane/chip_top.sdc`. (Modelling SCK as a divided generated clock *at the
+pad* was tried and rejected: it injects the SCK-pad insertion delay as ~3.3 ns of
+false launch/capture skew → bogus hold violations, RUN_2026-07-09_01-18-14.)
+
+**2. Under the correct model there is a real, small, slow-corner-only CS setup
+miss (~2.5 ns) — accepted and documented, not fixed in silicon.** The controller
+FSM asserts CS and enables SCK in the *same* cycle (`spi_master_controller.sv`
+IDLE), and the clkgen's first SCK rise lands on the *next* `clk_PAD` edge, so CS
+has exactly one 15.6 ns cycle (minus tCSP) to settle. The combinational decode →
+pad measures ~15.6 ns in `ss_125C_4v50`, so CS cannot beat the first 32 MHz SCK
+edge when 125 °C + 4.5 V + slow silicon coincide. `nom`/`tt`/`ff` all pass.
+Registering CS in RTL to make it a clean flop→pad was tried and **corrupts the
+protocol** — CS leads SCK by <1 cycle, so a 1-cycle register delay eats the whole
+lead (verified: `make sim-qspi` 0/6). Sign-off is therefore taken at the typical
+(`tt`) corners (`TIMING_VIOLATION_CORNERS: ["*tt*"]`), with the ss-corner CS
+marginality accepted. **This risk is real but bounded to the worst PVT corner.**
+
+Candidate fixes if the ss corner must be closed later (deferred):
+- **16 MHz SCK** (`CLK_DIV=1`) — first SCK edge moves out one cycle, giving CS
+  ~31 ns; but the quad read doubles to ~1 µs and likely overruns the CPU cycle
+  (contra the §Amendment-2026-07-07 budget) — needs re-measuring first.
+- **Register `csreg`/flash-select** in the controller to shorten the CS decode
+  tail (csreg is stable well before the transaction, so this does not disturb
+  CS-vs-SCK phasing) — keeps 32 MHz; may or may not fully close ss.
+- **Full source-synchronous CS pipeline** — robust flop→pad CS, but needs the
+  FSM to assert CS a cycle earlier and careful RX-turnaround handling.
+
+**Coupled decision — IO voltage.** The APS1604M is a 3.0–3.6 V part; the GF180 IO
+sign-off corners here are 4.5–5.5 V. Whether we use external level shifters (adds
+shifter propagation delay into the tCSP/tSP budget) or run the GF180 IO
+under-voltage at 3.3 V (invalidates the 4.5–5.5 V pad characterisation — pads are
+slower, so 5 V-corner STA is optimistic) **re-scopes this CS budget**. Tracked in
+[spike: QSPI IO voltage](../spikes/qspi-io-voltage.md) and
+[ADR 0006](0006-qspi-io-voltage-domain.md); the ss-corner acceptance above is
+provisional on that outcome.
+
 ## References
 
 - [ADR 0003 — Memory architecture (synthesized ROMs, now superseded here)](0003-memory-architecture.md)

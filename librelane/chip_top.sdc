@@ -76,9 +76,63 @@ set clk_core_inout_ports [get_ports {
     bidir_PAD[*]
 }]
 
+# Input delays: unchanged — all bidir pads referenced to the core clock. The
+# QSPI read/RX path is not timing-critical at 32 MHz SCK (the APS1604M drives
+# read data tACLK=2-5.5 ns after its clock; revisit as a source-synchronous
+# input if RX ever closes tight once the interface clock below exists).
 set_input_delay -min 0 -clock $clocks $clk_core_inout_ports
 set_input_delay -max $input_delay_value -clock $clocks $clk_core_inout_ports
-set_output_delay $output_delay_value -clock $clocks $clk_core_inout_ports
+
+# --------------------------------------------------------------------------- #
+#  QSPI output pads: device-accurate output delays (APS1604M-3SQR AC specs).
+# --------------------------------------------------------------------------- #
+# CS (bidir[33]=PSRAM, bidir[39]=flash) and SIO[3:0] (bidir[35..38]) are captured
+# by the external PSRAM on the SCK we emit (bidir[34]). SCK = clk_PAD / 2 (engine
+# CLK_DIV=0 -> 32 MHz) and its rising edges COINCIDE with clk_PAD edges, so the
+# device sampling edge is exactly one clk_PAD cycle after the launch edge — the
+# controller FSM asserts CS and enables SCK in the SAME cycle, and the clkgen's
+# first SCK rise lands on the next clk_PAD edge (verified in
+# spi_master_controller.sv IDLE + spi_master_clkgen.sv). So the honest model is a
+# single-cycle clk_PAD path with the device's real setup as output_delay:
+#   tCSP (CS setup to CLK)  = 2.5 ns   tCHD (CS hold from CLK) = 3.0 ns
+#   tSP  (data setup)       = 2.0 ns   tHD  (data hold)        = 2.0 ns
+# This replaces the stock 20% (3.125 ns) blanket for these pads with the accurate
+# 2.5/2.0 ns — and it is deliberately NOT modelled as a divided generated clock:
+# that put the SCK-pad insertion delay into the capture clock, creating ~3.3 ns
+# of false launch/capture skew and bogus hold violations (RUN_2026-07-09_01-18-14,
+# hold WNS -2.7 ns). Against clk_PAD (matched launch=capture) hold is clean.
+#
+# KNOWN RISK (accepted): even with the accurate deadline (~15.6 - 2.5 = 13.1 ns),
+# the combinational CS decode -> pad measures ~15.6 ns in the SLOW corner
+# (ss_125C_4v50), so CS setup misses by ~2.5 ns THERE ONLY (nom/tt/ff pass). CS
+# must beat the first 32 MHz SCK edge and, in the slow-slow + 125C + 4.5V corner,
+# just cannot. Sign-off is taken at nom/tt; the SS-corner CS marginality is
+# documented in docs/adr/0005 (WS-P2-10 timing) and docs/plans/rom-flash-
+# integration.md, with candidate fixes (16 MHz SCK / registered csreg / CS
+# pipeline). This also couples to the IO voltage decision (APS1604M is 3.0-3.6 V,
+# GF180 IO corners are 4.5-5.5 V) tracked in docs/spikes/qspi-io-voltage.md +
+# docs/adr/0006, which re-scopes this budget.
+set qspi_cs_ports  [get_ports {bidir_PAD[33] bidir_PAD[39]}]
+set qspi_sio_ports [get_ports {bidir_PAD[35] bidir_PAD[36] bidir_PAD[37] \
+                               bidir_PAD[38]}]
+
+# Blanket clk_PAD output delay for every bidir OUTPUT except the QSPI CS/SIO
+# pads (33,35,36,37,38,39), which get device-accurate values below. SCK
+# (bidir[34]) keeps the blanket — it is a clean registered flop->pad that meets
+# it. OpenSTA has no remove_from_collection: build [0..34], then drop CS pad 33
+# (35..39 are already outside the range).
+set clk_core_out_ports {}
+for {set i 0} {$i <= 34} {incr i} {
+    lappend clk_core_out_ports "bidir_PAD\[$i\]"
+}
+set clk_core_out_ports [lsearch -all -inline -not $clk_core_out_ports "bidir_PAD\[33\]"]
+set_output_delay $output_delay_value -clock $clocks [get_ports $clk_core_out_ports]
+
+# QSPI CS + SIO: real APS1604M setup (-max) / hold (-min = -hold) to clk_PAD.
+set_output_delay -clock $clocks -max  2.5 $qspi_cs_ports
+set_output_delay -clock $clocks -min -3.0 $qspi_cs_ports
+set_output_delay -clock $clocks -max  2.0 $qspi_sio_ports
+set_output_delay -clock $clocks -min -2.0 $qspi_sio_ports
 
 # Input-only pads
 set clk_core_input_ports [get_ports {
