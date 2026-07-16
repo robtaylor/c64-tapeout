@@ -95,11 +95,35 @@ module spi_master_controller
 
   assign en_quad = spi_qrd | spi_qwr | en_quad_int;
 
+  // LOCAL MODIFICATION (not upstream PULP). Defer the clock-enable RISE by one
+  // clk so the first command nibble gets setup before the first SCK rising edge.
+  //
+  // IDLE asserts spi_clock_en and loads the TX data register in the same cycle
+  // (ctrl_data_valid, below). At CLK_DIV=0 the clkgen parks spi_clk low while
+  // disabled and toggles on the very cycle `en` arrives, so that first rising
+  // edge lands on the same clk edge that launches the data: zero setup. The
+  // external part samples the nibble as it transitions and loses it. Every
+  // later nibble launches on spi_fall and is fine.
+  //
+  // The fall is deliberately NOT delayed (AND with the undelayed enable), so no
+  // extra trailing SCK edge appears. Costs one clk per transaction: a 0xEB QPI
+  // read goes 500ns -> 516ns, still inside the ~1us CPU period that requires
+  // 32MHz SCK (ADR 0005). Dropping to CLK_DIV=1 would also fix the setup but
+  // doubles the read to 1us and blows that budget.
+  logic spi_clock_en_q;
+  logic spi_clock_en_dly;
+  always_ff @(posedge clk, negedge rstn)
+  begin
+    if (rstn == 1'b0) spi_clock_en_q <= 1'b0;
+    else              spi_clock_en_q <= spi_clock_en;
+  end
+  assign spi_clock_en_dly = spi_clock_en & spi_clock_en_q;
+
   spi_master_clkgen u_clkgen
   (
     .clk           ( clk               ),
     .rstn          ( rstn              ),
-    .en            ( spi_clock_en      ),
+    .en            ( spi_clock_en_dly  ),
     .clk_div       ( spi_clk_div       ),
     .clk_div_valid ( spi_clk_div_valid ),
     .spi_clk       ( spi_clk           ),
