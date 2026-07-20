@@ -52,6 +52,7 @@ GF180 OCD SRAM macro: `sram1024x8m8wm1` — 1024×8-bit, single-port, 3.3V. Each
 ## Links
 
 - ADR 0001 — system scope
-- ADR 0005 — SRAM placement and PDN
-- `src/sram_wrapper.sv` — SRAM macro composition module
-- `src/rom_kernal.sv`, `src/rom_basic.sv`, `src/rom_chargen.sv` — synthesized ROMs
+- [ADR 0004](0004-external-qspi-psram.md) — external QSPI PSRAM (supersedes the main-RAM decision above)
+- [ADR 0005](0005-external-flash-roms.md) — external QSPI flash (supersedes the synthesized-ROM decision above)
+- `src/sram_wrapper.sv` — SRAM macro composition module (retired/stub after ADR 0004)
+- `src/rom_kernal.sv`, `src/rom_basic.sv`, `src/rom_chargen.sv` — synthesized ROMs (removed WS-P2-10, commit 7a9cc99; ROMs now external flash per ADR 0005)

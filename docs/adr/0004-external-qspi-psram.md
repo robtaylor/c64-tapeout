@@ -43,7 +43,7 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 
 3. **Drop the on-die *main-RAM* SRAM**: remove the `sram_wrapper` instantiation, the 3.3V OCD macro IP dep, the OCD `MACROS:` SRAM entries, the bulk SRAM PDN block, and the `USE_SRAM_MACROS` define. `src/sram_wrapper.sv` is retired (or left as a stub). The bulk 64 KB is served by the external PSRAM; a small on-die 5V SRAM for the two hottest fixed-address pages is retained per §9. *(This clause originally read "drop on-die SRAM **entirely**"; superseded 2026-07-05 — see [Superseded decisions](#superseded-decisions).)*
 
-4. **ROMs stay on-die** as synthesized LUT logic (KERNAL, BASIC, CHARGEN) — see ADR 0003 §2–4. They are not affected by this pivot.
+4. **ROMs** *(superseded 2026-07-06 by [ADR 0005](0005-external-flash-roms.md))*: this pivot originally left the ROMs on-die as synthesized LUT logic (KERNAL/BASIC/CHARGEN, ADR 0003 §2–4), "not affected by this pivot" — but those LUT ROMs then proved to be the dominant routing-congestion source and moved **off-die to external QSPI flash** on this same shared bus.
 
 5. **Color RAM stays on-die** as flops (1024 × 4 bits → 512 B equivalent) — ADR 0003 §5 unchanged. (The 2026-07-05 ZP/stack carve-out deliberately did *not* move color RAM into a macro — see §9.)
 
@@ -109,7 +109,7 @@ Three options were considered after the on-die SRAM plan ran into trouble during
 - [ADR 0001 — system scope](0001-system-scope-and-clock.md)
 - [ADR 0003 — memory architecture (superseded by this ADR for main RAM)](0003-memory-architecture.md)
 - `docs/plans/tapeout-roadmap.md` — workstreams to execute this pivot; `docs/plans/memory-integration.md` — memory subsystem detail
-- `src/qspi_psram_ctrl.sv` — controller module (to be written)
+- `rtl/qspi_psram_ctrl.sv` — controller module (implemented; also drives the shared flash bus per ADR 0005)
 
 ## Superseded decisions
 
