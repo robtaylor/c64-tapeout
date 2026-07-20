@@ -1,0 +1,84 @@
+{
+  "_comment": "Jacquard cosim harness for the C64 tapeout chip_top (WS-P2-6 / task 8). Boots the C64 from the external QSPI flash ROM + PSRAM on the post-PnR netlist (final/pnl/chip_top.pnl.v). Shared QSPI bus: SCK=bidir_PAD[34], SIO[3:0]=bidir_PAD[35..38] shared by both memories; PSRAM on CS bidir_PAD[33], flash on CS bidir_PAD[39]. GPIO indices below are logical handles mapped to top-level pad ports via port_mapping (build_gpio_mapping resolves the gf180 bi_24t CORE2PAD/PAD2CORE split). NOTE: both memories share clk_gpio=34 + d0_gpio=35 with distinct csn — depends on the GPU kernel arbitrating din to the CS-selected instance only (open verification). Flash modelled writable=true (functionally a read-only PSRAM per ADR 0005) so it can enter QPI + serve 0xEB reads; the controller never writes it. Video-streaming tap (signal_streams) added once boot is confirmed.",
+
+  "clock_gpio": 0,
+  "reset_gpio": 1,
+  "reset_active_high": false,
+  "reset_cycles": 20,
+  "num_cycles": 200000,
+  "clock_period_ps": 15625,
+
+  "_comment_clocks": "clk32 is an ON-DIE derived clock: a dffrnq_1 toggle FF (Q = i_chip_core.c64_u.buslogic.clk, D = ~Q via inv_1, clocked by the clk_PAD tree) divides the 64MHz pad clock by 2 to make the 32MHz C64 system clock. Cosim cuts the divider and schedules clk32 as a commensurable /2 domain (gpu-eda/Jacquard#185). Net is named as it appears in the flat post-PnR netlist, minus the escape backslash.",
+  "clocks": [
+    { "gpio": 0, "period_ps": 15625, "name": "clk_pad" },
+    {
+      "net": "i_chip_core.c64_u.buslogic.clk",
+      "derived_from": "clk_pad",
+      "divide_by": 2,
+      "name": "clk32"
+    }
+  ],
+
+  "qspi_memory": [
+    {
+      "name": "psram",
+      "clk_gpio": 34,
+      "csn_gpio": 33,
+      "d0_gpio": 35,
+      "writable": true,
+      "enter_qpi_cmd": 53,
+      "quad_write_cmd": 56,
+      "read_dummy_cycles": 6,
+      "size_bytes": 65536
+    },
+    {
+      "name": "rom",
+      "clk_gpio": 34,
+      "csn_gpio": 39,
+      "d0_gpio": 35,
+      "writable": true,
+      "enter_qpi_cmd": 56,
+      "quad_write_cmd": 56,
+      "read_dummy_cycles": 6,
+      "firmware": "cocotb/fixtures/c64_flash_rom.bin",
+      "size_bytes": 65536
+    }
+  ],
+
+  "_comment_video": "Video-streaming tap (gpu-eda/Jacquard#184): emits one byte per pixel (colorIndex[3..0], hsync, vsync packed LSB-first) on enablepixel strobe, over a UNIX socket. Render with docs/spikes/video-streaming-tap/c64_video_renderer.py. Net names verified against the post-PnR netlist.",
+  "signal_streams": [
+    {
+      "name": "video",
+      "socket": "/tmp/c64-video.sock",
+      "trigger": { "strobe": "\\i_chip_core.c64_u.enablepixel" },
+      "signals": [
+        "\\bidir_CORE2PAD[4]",
+        "\\bidir_CORE2PAD[3]",
+        "\\bidir_CORE2PAD[2]",
+        "\\bidir_CORE2PAD[1]",
+        "\\bidir_CORE2PAD[5]",
+        "\\bidir_CORE2PAD[6]"
+      ]
+    }
+  ],
+
+  "port_mapping": {
+    "inputs": {
+      "0": "clk_PAD",
+      "1": "rst_n_PAD",
+      "35": "bidir_PAD[35]",
+      "36": "bidir_PAD[36]",
+      "37": "bidir_PAD[37]",
+      "38": "bidir_PAD[38]"
+    },
+    "outputs": {
+      "33": "bidir_PAD[33]",
+      "34": "bidir_PAD[34]",
+      "35": "bidir_PAD[35]",
+      "36": "bidir_PAD[36]",
+      "37": "bidir_PAD[37]",
+      "38": "bidir_PAD[38]",
+      "39": "bidir_PAD[39]"
+    }
+  }
+}

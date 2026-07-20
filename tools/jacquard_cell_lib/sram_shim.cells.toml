@@ -1,0 +1,26 @@
+schema_version = "1.1"
+
+# Cell-library manifest for the GF180MCU foundry SRAM macro used by the C64
+# tapeout. Declares the hard macro as an explicit-port RAM cell so Jacquard
+# builds a proper RAMBlock during AIG construction (port-resolved pins,
+# polarity composition) and can preload it at tick 0. Companion to the sibling
+# `sram_shim.v` pin declarations.
+#
+# The C64 uses only the 256x8 macro: 2 instances = 512 B ZP/stack ($0000-$01FF),
+# ADR 0004. Active-low CEN/GWEN/WEN match the foundry model; the bit-granular
+# WEN[7:0] composes with CEN and GWEN as `clken & ce & we_global & we_mask[i]`.
+# Schema v1.1 (Jacquard cell-library manifest).
+
+[cells.gf180mcu_fd_ip_sram__sram256x8m8wm1]
+kind = "ram"
+
+[cells.gf180mcu_fd_ip_sram__sram256x8m8wm1.ram]
+depth = 256
+width = 8
+clock        = { pin = "CLK",  edge = "pos" }
+chip_enable  = { pin = "CEN",  polarity = "low" }
+write_enable = { pin = "GWEN", polarity = "low" }
+write_mask   = { pin = "WEN",  polarity = "low", granularity = "bit" }
+address      = "A"
+data_in      = "D"
+data_out     = "Q"
