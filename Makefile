@@ -147,6 +147,12 @@ JACQUARD_OUT       := build/jacquard
 COSIM_CONFIG       ?= cocotb/sim_config.json
 COSIM_MAX_EDGES    ?= 5000000
 COSIM_PERF_JSON    ?= $(JACQUARD_OUT)/cosim_perf.json
+# Split the AIG into pipeline stages at this combinational level so the
+# partitioner can map the design onto GPU blocks. Without it, one register's
+# fan-in cone overflows a block and cosim panics ("A single endpoint still
+# cannot map"). 40 is the coarsest cut that maps this netlist (the cone fills a
+# block around level 40-50); lower it if a future P&R run panics here again.
+COSIM_LEVEL_SPLIT  ?= 40
 
 NETLIST            := final/pnl/chip_top.pnl.v
 SDF                := final/sdf/$(JACQUARD_CORNER)/chip_top__$(JACQUARD_CORNER).sdf
@@ -189,6 +195,7 @@ jacquard-cosim: $(JACQUARD_BIN) vendor | $(JACQUARD_OUT) ## Stage 2: GPU-replay 
 	    --top-module $(JACQUARD_TOP) \
 	    --cell-library tools/jacquard_cell_lib/sram_shim.v \
 	    --cosim-perf-json $(COSIM_PERF_JSON) \
+	    --level-split $(COSIM_LEVEL_SPLIT) \
 	    --max-clock-edges $(COSIM_MAX_EDGES)
 .PHONY: jacquard-cosim
 
